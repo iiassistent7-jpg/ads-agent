@@ -23,6 +23,33 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 claude = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
 # ============================================================
+# CLAUDE API WITH RETRY
+# ============================================================
+def call_claude(system_prompt, user_content, max_tokens=2000, retries=3):
+    """Call Claude API with automatic retry on overload (529) errors."""
+    for attempt in range(retries):
+        try:
+            response = claude.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_content}]
+            )
+            return response.content[0].text
+        except anthropic.APIStatusError as e:
+            if e.status_code == 529 and attempt < retries - 1:
+                wait = (attempt + 1) * 10  # 10s, 20s, 30s
+                print(f"Claude overloaded, retry in {wait}s (attempt {attempt+1}/{retries})")
+                time.sleep(wait)
+                continue
+            elif e.status_code == 529:
+                return "⚠️ Сервер Claude перегружен, попробуй через пару минут."
+            else:
+                return f"❌ Ошибка Claude: {e.message}"
+        except Exception as e:
+            return f"❌ Ошибка: {str(e)}"
+
+# ============================================================
 # HELPERS
 # ============================================================
 def get_israel_now():
@@ -84,87 +111,50 @@ def get_account_insights(since, until):
 # ============================================================
 # EXTRACT ALL MEANINGFUL ACTIONS
 # ============================================================
-# Action types we care about, grouped by category
 ACTION_LABELS = {
-    # Leads
     "lead": "📋 Лиды (форма)",
     "onsite_conversion.lead_grouped": "📋 Лиды (форма)",
     "offsite_conversion.fb_pixel_lead": "📋 Лиды (пиксель)",
-    # Messages
     "onsite_conversion.messaging_conversation_started_7d": "💬 Переписки начаты",
     "messaging_conversation_started_7d": "💬 Переписки начаты",
     "onsite_conversion.messaging_first_reply": "💬 Первый ответ",
     "messaging_first_reply": "💬 Первый ответ",
-    # Engagement
     "landing_page_view": "🌐 Просмотры лендинга",
     "link_click": "🔗 Клики по ссылке",
     "post_engagement": "❤️ Вовлечённость",
-    # Conversions
     "omni_purchase": "🛒 Покупки",
-    "omni_initiated_checkout": "🛒 Начат чекаут",
     "contact_total": "📞 Контакты",
     "submit_application_total": "📝 Заявки",
-    "onsite_conversion.flow_complete": "✅ Поток завершён",
 }
 
 def extract_all_actions(insight):
-    """Extract ALL meaningful actions with their counts and costs."""
     actions = insight.get("actions", [])
     costs = insight.get("cost_per_action_type", [])
-
-    action_map = {}
-    for a in actions:
-        atype = a.get("action_type", "")
-        if atype in ACTION_LABELS:
-            action_map[atype] = int(a.get("value", 0))
-
-    cost_map = {}
-    for c in costs:
-        ctype = c.get("action_type", "")
-        if ctype in ACTION_LABELS:
-            cost_map[ctype] = float(c.get("value", 0))
-
+    action_map = {a.get("action_type", ""): int(a.get("value", 0)) for a in actions if a.get("action_type", "") in ACTION_LABELS}
+    cost_map = {c.get("action_type", ""): float(c.get("value", 0)) for c in costs if c.get("action_type", "") in ACTION_LABELS}
     result = []
     for atype, count in action_map.items():
         if count > 0:
-            label = ACTION_LABELS[atype]
-            cost = cost_map.get(atype, 0)
-            result.append({
-                "type": atype,
-                "label": label,
-                "count": count,
-                "cost_per": round(cost, 2),
-            })
-
+            result.append({"type": atype, "label": ACTION_LABELS[atype], "count": count, "cost_per": round(cost_map.get(atype, 0), 2)})
     return result
 
 def enrich_insights(insights):
-    """Build full campaign data with all metrics."""
     enriched = []
     for ins in insights:
         spend = float(ins.get("spend", 0))
         if spend == 0:
             continue
-
         impressions = int(ins.get("impressions", 0))
         clicks = int(ins.get("clicks", 0))
         ctr = round(float(ins.get("ctr", 0)), 2)
         cpc = round(float(ins.get("cpc", 0)), 2) if ins.get("cpc") else (round(spend / clicks, 2) if clicks > 0 else 0)
         cpm = round(float(ins.get("cpm", 0)), 2) if ins.get("cpm") else (round(spend / impressions * 1000, 2) if impressions > 0 else 0)
-
-        actions = extract_all_actions(ins)
-
         enriched.append({
             "campaign_name": ins.get("campaign_name", "—"),
-            "spend": round(spend, 2),
-            "impressions": impressions,
-            "clicks": clicks,
-            "ctr": ctr,
-            "cpc": cpc,
-            "cpm": cpm,
-            "actions": actions,
+            "spend": round(spend, 2), "impressions": impressions, "clicks": clicks,
+            "ctr": ctr, "cpc": cpc, "cpm": cpm,
+            "actions": extract_all_actions(ins),
         })
-
     enriched.sort(key=lambda x: x["spend"], reverse=True)
     return enriched
 
@@ -183,46 +173,32 @@ def format_report(data):
     header = f"📊 Сводка за {p_name} ({since}"
     if since != until:
         header += f" — {until}"
-    header += ")\n"
-    header += f"{'─' * 30}\n\n"
+    header += ")\n" + f"{'─' * 30}\n\n"
 
     body = ""
     total_spend = 0
-
     for c in campaigns:
         total_spend += c["spend"]
-        has_results = len(c["actions"]) > 0
-
-        emoji = "🟢" if has_results else "🔴"
+        emoji = "🟢" if c["actions"] else "🔴"
         body += f"{emoji} {c['campaign_name']}\n"
         body += f"   💰 ${c['spend']:.2f} | 👁 {c['impressions']:,} показов\n"
         body += f"   🖱 {c['clicks']} кликов | CTR {c['ctr']:.2f}% | CPC ${c['cpc']:.2f}\n"
-
         for a in c["actions"]:
             body += f"   {a['label']}: {a['count']}"
             if a["cost_per"] > 0:
                 body += f" (${a['cost_per']:.2f}/шт)"
             body += "\n"
-
         body += "\n"
 
-    footer = f"{'─' * 30}\n"
-    footer += f"💵 Общий расход: ${total_spend:.2f}\n"
-
-    # Aggregate results across campaigns
+    footer = f"{'─' * 30}\n💵 Общий расход: ${total_spend:.2f}\n"
     totals = {}
     for c in campaigns:
         for a in c["actions"]:
-            key = a["label"]
-            if key not in totals:
-                totals[key] = 0
-            totals[key] += a["count"]
-
+            totals[a["label"]] = totals.get(a["label"], 0) + a["count"]
     if totals:
-        footer += "🎯 Итого результатов:\n"
+        footer += "🎯 Итого:\n"
         for label, count in totals.items():
             footer += f"   {label}: {count}\n"
-
     return header + body + footer
 
 # ============================================================
@@ -235,24 +211,18 @@ period: today | yesterday | week | month
 show: spend | all_campaigns
 
 - "как дела", "статус", "сводка" → today, spend
-- "вчера" → yesterday, spend  
+- "вчера" → yesterday, spend
 - "неделя" → week, spend
 - "месяц" → month, spend
 - "все кампании", "список", "сколько" → all_campaigns
 - по умолчанию → today, spend"""
 
 def detect_intent(user_text):
+    raw = call_claude(INTENT_PROMPT, user_text, max_tokens=100, retries=3)
     try:
-        response = claude.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=100,
-            system=INTENT_PROMPT,
-            messages=[{"role": "user", "content": user_text}]
-        )
-        raw = response.content[0].text.strip().replace("```json", "").replace("```", "").strip()
-        return json.loads(raw)
-    except Exception as e:
-        print(f"Intent error: {e}")
+        clean = raw.replace("```json", "").replace("```", "").strip()
+        return json.loads(clean)
+    except:
         return {"period": "today", "show": "spend"}
 
 # ============================================================
@@ -263,10 +233,7 @@ def fetch_spend_data(period):
     insights = get_account_insights(since, until)
     campaigns = enrich_insights(insights)
     total_spend = sum(c["spend"] for c in campaigns)
-    return {
-        "period": period, "since": since, "until": until,
-        "campaigns": campaigns, "total_spend": round(total_spend, 2),
-    }
+    return {"period": period, "since": since, "until": until, "campaigns": campaigns, "total_spend": round(total_spend, 2)}
 
 def fetch_all_campaigns_list():
     camps = get_all_campaigns()
@@ -275,7 +242,7 @@ def fetch_all_campaigns_list():
     return {"total": len(camps), "active_names": active, "active_count": len(active), "paused_count": paused}
 
 # ============================================================
-# CLAUDE RESPONSE (for free-text)
+# CLAUDE RESPONSE
 # ============================================================
 RESPONSE_PROMPT = """Ты — аналитик Meta Ads для салона iStudio Beauty Centre (Ришон ле-Цион).
 
@@ -283,48 +250,40 @@ RESPONSE_PROMPT = """Ты — аналитик Meta Ads для салона iStu
 1. Отвечай ТОЛЬКО на основе данных JSON. НЕ придумывай.
 2. Если campaigns пуст — "расхода не было".
 3. НЕ используй Markdown таблицы. Эмодзи-формат.
-4. КРАТКО но ПОЛНО: покажи ВСЕ метрики каждой кампании.
+4. КРАТКО но ПОЛНО: все метрики каждой кампании.
 5. НЕ задавай вопросов в конце.
-6. Анализируй: что работает, что нет, на что обратить внимание.
+6. Анализируй: что работает, что нет.
 
-Формат на кампанию:
+Формат:
 🟢/🔴 Название
    💰 Расход | 👁 Показы | 🖱 Клики | CTR | CPC
-   [все actions с их стоимостью]
-   💡 Краткий вывод по кампании
+   [actions с ценой]
+   💡 Краткий вывод
 
-В конце — общий итог и рекомендация.
-
-Ориентиры CPL: B-Flexy $3.67, КП+РФ $4.77, Карбон 25 ИВР $5.09, Эндосфера+РФ $5.85"""
+Итог + рекомендация.
+Ориентиры CPL: B-Flexy $3.67, КП+РФ $4.77, Карбон 25 ИВР $5.09"""
 
 def generate_response(user_text, data):
-    try:
-        if "active_names" in data:
-            text = f"📋 Всего: {data['total']}\n🟢 Активных: {data['active_count']} | 🔴 На паузе: {data['paused_count']}\n\n"
-            if data["active_names"]:
-                for name in data["active_names"]:
-                    text += f"  🟢 {name}\n"
-            else:
-                text += "Нет активных кампаний."
-            return text
+    if "active_names" in data:
+        text = f"📋 Всего: {data['total']}\n🟢 Активных: {data['active_count']} | 🔴 На паузе: {data['paused_count']}\n\n"
+        if data["active_names"]:
+            for name in data["active_names"]:
+                text += f"  🟢 {name}\n"
+        else:
+            text += "Нет активных кампаний."
+        return text
 
-        campaigns = data.get("campaigns", [])
-        p_names = {"today": "сегодня", "yesterday": "вчера", "week": "неделю", "month": "месяц"}
-        if not campaigns:
-            return f"📊 За {p_names.get(data.get('period','today'),'')} расхода не было."
+    campaigns = data.get("campaigns", [])
+    p_names = {"today": "сегодня", "yesterday": "вчера", "week": "неделю", "month": "месяц"}
+    if not campaigns:
+        return f"📊 За {p_names.get(data.get('period','today'),'')} расхода не было."
 
-        response = claude.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=2000,
-            system=RESPONSE_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": f"Данные:\n{json.dumps(data, ensure_ascii=False)}\n\nЗапрос: {user_text}"
-            }]
-        )
-        return response.content[0].text
-    except Exception as e:
-        return f"Ошибка: {e}"
+    return call_claude(
+        RESPONSE_PROMPT,
+        f"Данные:\n{json.dumps(data, ensure_ascii=False)}\n\nЗапрос: {user_text}",
+        max_tokens=2000,
+        retries=3
+    )
 
 # ============================================================
 # MORNING REPORT
@@ -343,15 +302,13 @@ def send_morning_report():
 # ============================================================
 @bot.message_handler(commands=["start"])
 def cmd_start(message):
-    if message.chat.id != MY_CHAT_ID:
-        return
+    if message.chat.id != MY_CHAT_ID: return
     bot.send_message(MY_CHAT_ID,
         "👋 Привет! Я твой Meta Ads аналитик.\n\n"
         "Просто спрашивай:\n"
         "• «Как дела?» — сегодня\n"
         "• «Что вчера?» — вчера\n"
-        "• «За неделю» / «За месяц»\n"
-        "• «Все кампании» — список\n\n"
+        "• «За неделю» / «За месяц»\n\n"
         "/today /yesterday /week /month /campaigns /alerts"
     )
 
