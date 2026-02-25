@@ -26,7 +26,7 @@ claude = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 # CLAUDE API WITH RETRY
 # ============================================================
 def call_claude(system_prompt, user_content, max_tokens=2000, retries=3):
-    """Call Claude API with automatic retry on overload (529) errors."""
+    """Call Claude with retry. Returns None on failure (for fallback)."""
     for attempt in range(retries):
         try:
             response = claude.messages.create(
@@ -38,16 +38,16 @@ def call_claude(system_prompt, user_content, max_tokens=2000, retries=3):
             return response.content[0].text
         except anthropic.APIStatusError as e:
             if e.status_code == 529 and attempt < retries - 1:
-                wait = (attempt + 1) * 10  # 10s, 20s, 30s
-                print(f"Claude overloaded, retry in {wait}s (attempt {attempt+1}/{retries})")
+                wait = (attempt + 1) * 10
+                print(f"Claude overloaded, retry in {wait}s ({attempt+1}/{retries})")
                 time.sleep(wait)
                 continue
-            elif e.status_code == 529:
-                return "⚠️ Сервер Claude перегружен, попробуй через пару минут."
             else:
-                return f"❌ Ошибка Claude: {e.message}"
+                print(f"Claude error: {e.status_code} - {e.message}")
+                return None
         except Exception as e:
-            return f"❌ Ошибка: {str(e)}"
+            print(f"Claude exception: {e}")
+            return None
 
 # ============================================================
 # HELPERS
@@ -109,14 +109,16 @@ def get_account_insights(since, until):
     return all_insights
 
 # ============================================================
-# EXTRACT ALL MEANINGFUL ACTIONS
+# EXTRACT ACTIONS — with deduplication
 # ============================================================
-ACTION_LABELS = {
+# Map raw Meta action types to display labels
+# Multiple raw types can map to the same label — we take the MAX count
+ACTION_TYPE_TO_LABEL = {
     "lead": "📋 Лиды (форма)",
     "onsite_conversion.lead_grouped": "📋 Лиды (форма)",
     "offsite_conversion.fb_pixel_lead": "📋 Лиды (пиксель)",
-    "onsite_conversion.messaging_conversation_started_7d": "💬 Переписки начаты",
-    "messaging_conversation_started_7d": "💬 Переписки начаты",
+    "onsite_conversion.messaging_conversation_started_7d": "💬 Переписки",
+    "messaging_conversation_started_7d": "💬 Переписки",
     "onsite_conversion.messaging_first_reply": "💬 Первый ответ",
     "messaging_first_reply": "💬 Первый ответ",
     "landing_page_view": "🌐 Просмотры лендинга",
@@ -124,19 +126,37 @@ ACTION_LABELS = {
     "post_engagement": "❤️ Вовлечённость",
     "omni_purchase": "🛒 Покупки",
     "contact_total": "📞 Контакты",
-    "submit_application_total": "📝 Заявки",
 }
 
 def extract_all_actions(insight):
+    """Extract actions with deduplication — same label = take max count."""
     actions = insight.get("actions", [])
     costs = insight.get("cost_per_action_type", [])
-    action_map = {a.get("action_type", ""): int(a.get("value", 0)) for a in actions if a.get("action_type", "") in ACTION_LABELS}
-    cost_map = {c.get("action_type", ""): float(c.get("value", 0)) for c in costs if c.get("action_type", "") in ACTION_LABELS}
-    result = []
+
+    # Build raw maps
+    action_map = {}
+    for a in actions:
+        atype = a.get("action_type", "")
+        if atype in ACTION_TYPE_TO_LABEL:
+            action_map[atype] = int(a.get("value", 0))
+
+    cost_map = {}
+    for c in costs:
+        ctype = c.get("action_type", "")
+        if ctype in ACTION_TYPE_TO_LABEL:
+            cost_map[ctype] = float(c.get("value", 0))
+
+    # Deduplicate: group by label, take max count
+    label_data = {}
     for atype, count in action_map.items():
-        if count > 0:
-            result.append({"type": atype, "label": ACTION_LABELS[atype], "count": count, "cost_per": round(cost_map.get(atype, 0), 2)})
-    return result
+        if count <= 0:
+            continue
+        label = ACTION_TYPE_TO_LABEL[atype]
+        cost = cost_map.get(atype, 0)
+        if label not in label_data or count > label_data[label]["count"]:
+            label_data[label] = {"label": label, "count": count, "cost_per": round(cost, 2)}
+
+    return list(label_data.values())
 
 def enrich_insights(insights):
     enriched = []
@@ -159,7 +179,7 @@ def enrich_insights(insights):
     return enriched
 
 # ============================================================
-# FORMAT REPORT
+# FORMAT REPORT (no Claude needed)
 # ============================================================
 def format_report(data):
     campaigns = data.get("campaigns", [])
@@ -202,7 +222,7 @@ def format_report(data):
     return header + body + footer
 
 # ============================================================
-# INTENT DETECTION
+# INTENT DETECTION (with fallback)
 # ============================================================
 INTENT_PROMPT = """Парсер запросов. Ответь ТОЛЬКО JSON без markdown:
 {"period": "today", "show": "spend"}
@@ -210,7 +230,7 @@ INTENT_PROMPT = """Парсер запросов. Ответь ТОЛЬКО JSON
 period: today | yesterday | week | month
 show: spend | all_campaigns
 
-- "как дела", "статус", "сводка" → today, spend
+- "как дела", "статус", "сводка", "сейчас" → today, spend
 - "вчера" → yesterday, spend
 - "неделя" → week, spend
 - "месяц" → month, spend
@@ -218,12 +238,32 @@ show: spend | all_campaigns
 - по умолчанию → today, spend"""
 
 def detect_intent(user_text):
-    raw = call_claude(INTENT_PROMPT, user_text, max_tokens=100, retries=3)
-    try:
-        clean = raw.replace("```json", "").replace("```", "").strip()
-        return json.loads(clean)
-    except:
-        return {"period": "today", "show": "spend"}
+    """Detect intent via Claude. If Claude is down, use keyword matching."""
+    raw = call_claude(INTENT_PROMPT, user_text, max_tokens=100, retries=2)
+
+    if raw:
+        try:
+            clean = raw.replace("```json", "").replace("```", "").strip()
+            return json.loads(clean)
+        except:
+            pass
+
+    # Fallback: simple keyword matching when Claude is unavailable
+    text = user_text.lower()
+    period = "today"
+    show = "spend"
+
+    if any(w in text for w in ["вчера", "yesterday"]):
+        period = "yesterday"
+    elif any(w in text for w in ["недел", "week", "7 дней"]):
+        period = "week"
+    elif any(w in text for w in ["месяц", "month", "30 дней"]):
+        period = "month"
+
+    if any(w in text for w in ["все кампании", "все компании", "список", "сколько кампаний"]):
+        show = "all_campaigns"
+
+    return {"period": period, "show": show}
 
 # ============================================================
 # FETCH DATA
@@ -242,7 +282,7 @@ def fetch_all_campaigns_list():
     return {"total": len(camps), "active_names": active, "active_count": len(active), "paused_count": paused}
 
 # ============================================================
-# CLAUDE RESPONSE
+# CLAUDE RESPONSE (with fallback to format_report)
 # ============================================================
 RESPONSE_PROMPT = """Ты — аналитик Meta Ads для салона iStudio Beauty Centre (Ришон ле-Цион).
 
@@ -250,7 +290,7 @@ RESPONSE_PROMPT = """Ты — аналитик Meta Ads для салона iStu
 1. Отвечай ТОЛЬКО на основе данных JSON. НЕ придумывай.
 2. Если campaigns пуст — "расхода не было".
 3. НЕ используй Markdown таблицы. Эмодзи-формат.
-4. КРАТКО но ПОЛНО: все метрики каждой кампании.
+4. КРАТКО но ПОЛНО: все метрики.
 5. НЕ задавай вопросов в конце.
 6. Анализируй: что работает, что нет.
 
@@ -264,6 +304,7 @@ RESPONSE_PROMPT = """Ты — аналитик Meta Ads для салона iStu
 Ориентиры CPL: B-Flexy $3.67, КП+РФ $4.77, Карбон 25 ИВР $5.09"""
 
 def generate_response(user_text, data):
+    # Campaign list — no Claude needed
     if "active_names" in data:
         text = f"📋 Всего: {data['total']}\n🟢 Активных: {data['active_count']} | 🔴 На паузе: {data['paused_count']}\n\n"
         if data["active_names"]:
@@ -278,12 +319,18 @@ def generate_response(user_text, data):
     if not campaigns:
         return f"📊 За {p_names.get(data.get('period','today'),'')} расхода не было."
 
-    return call_claude(
+    # Try Claude for smart analysis
+    claude_response = call_claude(
         RESPONSE_PROMPT,
         f"Данные:\n{json.dumps(data, ensure_ascii=False)}\n\nЗапрос: {user_text}",
-        max_tokens=2000,
-        retries=3
+        max_tokens=2000, retries=2
     )
+
+    # If Claude works — use it; otherwise fallback to format_report
+    if claude_response:
+        return claude_response
+    else:
+        return format_report(data)
 
 # ============================================================
 # MORNING REPORT
