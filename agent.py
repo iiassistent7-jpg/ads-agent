@@ -387,7 +387,7 @@ def extract_fb_tag(tags):
 
 def parse_campaign_tag(tags):
     """Parse procedure/language/budget tag like 'Карбон ИВР 250'."""
-    branches = {"Ришон", "Хайфа", "Тель-Авив"}
+    branches = {"Ришон", "Хайфа", "Тель-Авив", "Ашдод", "Раат"}
     for tag in tags:
         if tag.startswith("fb") or tag in branches:
             continue
@@ -403,10 +403,48 @@ def parse_campaign_tag(tags):
 
 def get_deal_branch(tags):
     """Extract branch from tags."""
+    known_branches = ["Ришон", "Хайфа", "Тель-Авив", "Ашдод", "Раат"]
     for tag in tags:
-        if tag in ["Ришон", "Хайфа", "Тель-Авив"]:
-            return tag
+        for b in known_branches:
+            if b.lower() in tag.lower():
+                return b
     return "Не указан"
+
+def should_filter_branch(branch, since=None, until=None):
+    """Determine if a deal should be included based on branch and period.
+    
+    Rules:
+    - Always EXCLUDE Ашдод deals (closed branch, bad data)
+    - Always EXCLUDE Раат deals (sold, deleted from CRM anyway)
+    - If period <= 1 year: ONLY include Ришон (main active branch)
+    - If period > 1 year: include ALL except Ашдод and Раат
+    - "Не указан" (no branch tag): always include (most are Rishon)
+    """
+    # Always exclude Ashdod and Raat
+    if branch in ["Ашдод", "Раат"]:
+        return False  # exclude
+    
+    # If no date filter — include everything except Ashdod/Raat
+    if not since or not until:
+        return True
+    
+    # Calculate period length
+    try:
+        from_date = datetime.strptime(since, "%Y-%m-%d").date()
+        to_date = datetime.strptime(until, "%Y-%m-%d").date()
+        period_days = (to_date - from_date).days
+    except:
+        return True
+    
+    # If period > 365 days — include all branches (except Ashdod/Raat)
+    if period_days > 365:
+        return True
+    
+    # Period <= 1 year — only Rishon and unlabeled
+    if branch in ["Ришон", "Не указан"]:
+        return True
+    
+    return False  # exclude Хайфа, Тель-Авив for short periods
 
 # ============================================================
 # DEEP ANALYTICS
@@ -441,7 +479,8 @@ def analyze_crm_data(since=None, until=None):
                 closed_lost_ids.add(s["id"])
 
     total_revenue = 0
-    total_deals = len(deals)
+    total_deals = 0
+    filtered_out = 0
     deals_with_revenue = 0
     by_source = {}
     by_campaign_tag = {}
@@ -462,6 +501,12 @@ def analyze_crm_data(since=None, until=None):
         created_at = deal.get("created_at", 0)
         closed_at = deal.get("closed_at", 0)
 
+        # Filter by branch
+        if not should_filter_branch(branch, since, until):
+            filtered_out += 1
+            continue
+
+        total_deals += 1
         total_revenue += price
         if price > 0:
             deals_with_revenue += 1
@@ -537,6 +582,8 @@ def analyze_crm_data(since=None, until=None):
 
     return {
         "total_deals": total_deals,
+        "filtered_out_deals": filtered_out,
+        "branch_filter": "Только Ришон" if since and until and (datetime.strptime(until, "%Y-%m-%d").date() - datetime.strptime(since, "%Y-%m-%d").date()).days <= 365 else "Все кроме Ашдода",
         "total_revenue": total_revenue,
         "deals_with_revenue": deals_with_revenue,
         "avg_deal": round(total_revenue / deals_with_revenue, 2) if deals_with_revenue > 0 else 0,
@@ -1115,6 +1162,12 @@ ANALYST_PROMPT = """Ты — личный бизнес-аналитик для �
 - Хороший процент закрытия: 15-25%
 - Золотой клиент: 3+ визита или ₪3000+ выручки
 - Средний чек iStudio: ₪350-500
+
+КОНТЕКСТ ПО ФИЛИАЛАМ:
+- Сейчас работает только Ришон ле-Цион
+- Ашдод закрыт, Раат продан — их данные отфильтрованы
+- Если в данных есть "branch_filter" — скажи какой фильтр применён
+- "Не указан" в филиале = скорее всего Ришон (у многих клиентов город слетел при удалении Раата из CRM)
 """
 
 def generate_response(user_text, data, data_type="spend"):
@@ -1468,8 +1521,16 @@ def handle_voice(message):
             data = full_analytics(since, until)
             safe_send(MY_CHAT_ID, generate_response(text, data, "full_report"))
         elif show in ("budget_advice", "dead_campaigns"):
-            data = analyze_campaign_roi(since, until)
-            safe_send(MY_CHAT_ID, generate_response(text, data, show))
+            golden_data = analyze_golden_clients(since, until)
+            meta_data = {}
+            try:
+                roi = analyze_campaign_roi(since, until)
+                if roi and "error" not in roi:
+                    meta_data = roi
+            except:
+                pass
+            combined = {"crm_analysis": golden_data, "meta_analysis": meta_data}
+            safe_send(MY_CHAT_ID, generate_response(text, combined, show))
         elif show == "best_source":
             data = analyze_golden_clients(since, until)
             safe_send(MY_CHAT_ID, generate_response(text, data, "best_source"))
@@ -1519,6 +1580,14 @@ def handle_text(message):
             safe_send(MY_CHAT_ID, generate_response(user_text, data, "crm"))
         elif show == "roi":
             data = analyze_campaign_roi(since, until)
+            # If Meta returned $0 spend, enrich with CRM campaign quality data
+            if data and data.get("meta_total_spend", 0) == 0:
+                try:
+                    golden = analyze_golden_clients(since, until)
+                    data["crm_campaign_quality"] = golden.get("campaign_quality", {})
+                    data["crm_source_breakdown"] = golden.get("source_breakdown", {})
+                except:
+                    pass
             safe_send(MY_CHAT_ID, generate_response(user_text, data, "roi"))
         elif show == "ltv":
             data = analyze_ltv(since, until)
@@ -1535,13 +1604,30 @@ def handle_text(message):
             data = full_analytics(since, until)
             safe_send(MY_CHAT_ID, generate_response(user_text, data, "full_report"))
         elif show == "budget_advice":
-            safe_send(MY_CHAT_ID, "💰 Анализирую бюджет...\n⏳")
-            data = analyze_campaign_roi(since, until)
-            safe_send(MY_CHAT_ID, generate_response(user_text, data, "budget_advice"))
+            safe_send(MY_CHAT_ID, "💰 Анализирую данные для бюджета...\n⏳")
+            # Use golden clients (CRM data with campaign tags) + Meta if available
+            golden_data = analyze_golden_clients(since, until)
+            meta_data = {}
+            try:
+                roi = analyze_campaign_roi(since, until)
+                if roi and "error" not in roi:
+                    meta_data = roi
+            except:
+                pass
+            combined = {"crm_analysis": golden_data, "meta_analysis": meta_data}
+            safe_send(MY_CHAT_ID, generate_response(user_text, combined, "budget_advice"))
         elif show == "dead_campaigns":
-            safe_send(MY_CHAT_ID, "💀 Ищу мёртвые кампании...\n⏳")
-            data = analyze_campaign_roi(since, until)
-            safe_send(MY_CHAT_ID, generate_response(user_text, data, "dead_campaigns"))
+            safe_send(MY_CHAT_ID, "💀 Ищу неэффективные кампании...\n⏳")
+            golden_data = analyze_golden_clients(since, until)
+            meta_data = {}
+            try:
+                roi = analyze_campaign_roi(since, until)
+                if roi and "error" not in roi:
+                    meta_data = roi
+            except:
+                pass
+            combined = {"crm_analysis": golden_data, "meta_analysis": meta_data}
+            safe_send(MY_CHAT_ID, generate_response(user_text, combined, "dead_campaigns"))
         elif show == "best_source":
             safe_send(MY_CHAT_ID, "🔍 Сравниваю источники клиентов...\n⏳")
             data = analyze_golden_clients(since, until)
