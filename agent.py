@@ -830,8 +830,13 @@ if __name__ == "__main__":
     print("🚀 Bot starting...")
     print(f"📅 Israel time: {get_israel_now().strftime('%Y-%m-%d %H:%M')}")
     print(f"📊 amoCRM: {'✅ configured' if AMOCRM_TOKEN else '❌ no token'}")
+    
+    # Clear any stuck webhooks/polling
+    bot.delete_webhook(drop_pending_updates=True)
+    time.sleep(1)
+    
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
     print("⏰ Daily 08:00 | Weekly CRM: Sunday 09:00")
     print("📱 Polling...")
-    bot.infinity_polling()
+    bot.infinity_polling(timeout=60, long_polling_timeout=60)
