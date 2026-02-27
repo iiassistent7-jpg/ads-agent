@@ -947,7 +947,15 @@ INTENT_PROMPT = """Парсер запросов рекламного/CRM бот
 
 period: today | yesterday | week | month | 3months | 6months | year | all | custom
 show: spend | all_campaigns | crm | roi | ltv | funnel | golden | full_report | budget_advice | dead_campaigns | best_source | branch_compare
-custom_dates: null или {"since": "2025-01-01", "until": "2025-01-31"} если указан конкретный месяц/даты
+custom_dates: null или {"since": "YYYY-MM-DD", "until": "YYYY-MM-DD"} — ОБЯЗАТЕЛЬНО вычисли даты если указан конкретный период
+
+ПРАВИЛА ДЛЯ ПЕРИОДОВ:
+- Если пользователь указал конкретное число месяцев/недель/дней — ВЫЧИСЛИ custom_dates от сегодня назад
+- "за 8 месяцев" → period: "custom", custom_dates: {"since": "2025-06-27", "until": "2026-02-27"}
+- "за последние 2 месяца" → period: "custom", custom_dates вычисли
+- "за январь" → period: "custom", custom_dates: {"since": "2026-01-01", "until": "2026-01-31"}
+- "с июля по декабрь" → period: "custom", custom_dates с нужными датами
+- Стандартные периоды БЕЗ custom_dates: today, yesterday, week, month, 3months, 6months, year, all
 
 ОПРЕДЕЛЯЙ ПО СМЫСЛУ:
 Расходы и реклама:
@@ -1001,17 +1009,39 @@ def detect_intent(user_text):
     text = user_text.lower()
     period = "today"
     show = "spend"
+    custom_dates = None
 
-    if any(w in text for w in ["вчера", "yesterday"]):
+    # Check for specific number of months/weeks/days first
+    import re as re_mod
+    num_months = re_mod.search(r'(\d+)\s*месяц', text)
+    num_weeks = re_mod.search(r'(\d+)\s*недел', text)
+    num_days = re_mod.search(r'(\d+)\s*(дн|день|дней)', text)
+
+    if num_months:
+        period = "custom"
+        n = int(num_months.group(1))
+        today = get_israel_now().date()
+        custom_dates = {"since": str(today - timedelta(days=n * 30)), "until": str(today)}
+    elif num_weeks:
+        period = "custom"
+        n = int(num_weeks.group(1))
+        today = get_israel_now().date()
+        custom_dates = {"since": str(today - timedelta(weeks=n)), "until": str(today)}
+    elif num_days:
+        period = "custom"
+        n = int(num_days.group(1))
+        today = get_israel_now().date()
+        custom_dates = {"since": str(today - timedelta(days=n)), "until": str(today)}
+    elif any(w in text for w in ["вчера", "yesterday"]):
         period = "yesterday"
-    elif any(w in text for w in ["недел", "week", "7 дней"]):
+    elif any(w in text for w in ["недел", "week"]):
         period = "week"
-    elif any(w in text for w in ["месяц", "month", "30 дней"]):
-        period = "month"
-    elif any(w in text for w in ["3 месяц", "квартал"]):
+    elif any(w in text for w in ["квартал"]):
         period = "3months"
-    elif any(w in text for w in ["полгод", "6 месяц"]):
+    elif any(w in text for w in ["полгод"]):
         period = "6months"
+    elif any(w in text for w in ["месяц", "month"]):
+        period = "month"
     elif any(w in text for w in ["год", "year"]):
         period = "year"
 
@@ -1038,7 +1068,7 @@ def detect_intent(user_text):
     elif any(w in text for w in ["воронка", "конверси", "funnel", "теряем", "потери", "куда уход"]):
         show = "funnel"
 
-    return {"period": period, "show": show, "custom_dates": None}
+    return {"period": period, "show": show, "custom_dates": custom_dates}
 
 # ============================================================
 # RESPONSE GENERATION
