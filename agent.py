@@ -347,13 +347,13 @@ def get_amocrm_contacts(contact_ids):
     for i in range(0, len(unique_ids), batch_size):
         batch = unique_ids[i:i + batch_size]
         filter_str = "&".join([f"filter[id][]={cid}" for cid in batch])
-        data = amocrm_request(f"contacts?{filter_str}&with=leads")
+        data = amocrm_request(f"contacts?{filter_str}")
         if data:
             for c in data.get("_embedded", {}).get("contacts", []):
                 name = c.get("name", "Без имени")
                 phone = ""
                 email = ""
-                for cf in c.get("custom_fields_values", []):
+                for cf in (c.get("custom_fields_values") or []):
                     field_code = cf.get("field_code", "")
                     values = cf.get("values", [])
                     if field_code == "PHONE" and values:
