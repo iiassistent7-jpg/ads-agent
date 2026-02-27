@@ -347,13 +347,13 @@ def get_amocrm_contacts(contact_ids):
     for i in range(0, len(unique_ids), batch_size):
         batch = unique_ids[i:i + batch_size]
         filter_str = "&".join([f"filter[id][]={cid}" for cid in batch])
-        data = amocrm_request(f"contacts?{filter_str}")
+        data = amocrm_request(f"contacts?{filter_str}&with=leads")
         if data:
             for c in data.get("_embedded", {}).get("contacts", []):
                 name = c.get("name", "Без имени")
                 phone = ""
                 email = ""
-                for cf in (c.get("custom_fields_values") or []):
+                for cf in c.get("custom_fields_values", []):
                     field_code = cf.get("field_code", "")
                     values = cf.get("values", [])
                     if field_code == "PHONE" and values:
@@ -594,11 +594,24 @@ def analyze_golden_clients(since=None, until=None):
         client_phone = cinfo.get("phone", "")
         client_email = cinfo.get("email", "")
 
+        # Determine client source
+        if fb_tags:
+            client_source = "Реклама Meta"
+            client_source_detail = ", ".join(campaigns) if campaigns else fb_tags[0]
+        elif campaigns:
+            client_source = "Реклама Meta"
+            client_source_detail = ", ".join(campaigns)
+        else:
+            client_source = "Рекомендация / сарафан"
+            client_source_detail = "Без рекламного тега"
+
         client_info = {
             "contact_id": cid,
             "name": client_name,
             "phone": client_phone,
             "email": client_email,
+            "source": client_source,
+            "source_detail": client_source_detail,
             "total_spent": total_spent,
             "deal_count": deal_count,
             "won_count": won_count,
@@ -653,6 +666,27 @@ def analyze_golden_clients(since=None, until=None):
 
     sorted_quality = sorted(campaign_quality_clean.items(), key=lambda x: x[1]["quality_score"], reverse=True)
 
+    # Source breakdown: Ads vs Referral
+    all_clients = golden_clients + repeat_clients + one_time_clients
+    from_ads = [c for c in all_clients if c["source"] == "Реклама Meta"]
+    from_referral = [c for c in all_clients if c["source"] == "Рекомендация / сарафан"]
+
+    golden_from_ads = [c for c in golden_clients if c["source"] == "Реклама Meta"]
+    golden_from_referral = [c for c in golden_clients if c["source"] == "Рекомендация / сарафан"]
+
+    source_breakdown = {
+        "total_from_ads": len(from_ads),
+        "total_from_referral": len(from_referral),
+        "revenue_from_ads": sum(c["total_spent"] for c in from_ads),
+        "revenue_from_referral": sum(c["total_spent"] for c in from_referral),
+        "avg_ltv_ads": round(sum(c["total_spent"] for c in from_ads) / len(from_ads), 0) if from_ads else 0,
+        "avg_ltv_referral": round(sum(c["total_spent"] for c in from_referral) / len(from_referral), 0) if from_referral else 0,
+        "golden_from_ads": len(golden_from_ads),
+        "golden_from_referral": len(golden_from_referral),
+        "golden_revenue_ads": sum(c["total_spent"] for c in golden_from_ads),
+        "golden_revenue_referral": sum(c["total_spent"] for c in golden_from_referral),
+    }
+
     return {
         "golden_clients_count": len(golden_clients),
         "repeat_clients_count": len(repeat_clients),
@@ -660,6 +694,7 @@ def analyze_golden_clients(since=None, until=None):
         "top_golden": golden_clients[:15],
         "top_repeat": repeat_clients[:10],
         "campaign_quality": dict(sorted_quality[:15]),
+        "source_breakdown": source_breakdown,
         "total_golden_revenue": sum(c["total_spent"] for c in golden_clients),
         "total_repeat_revenue": sum(c["total_spent"] for c in repeat_clients),
         "total_onetime_revenue": sum(c["total_spent"] for c in one_time_clients),
