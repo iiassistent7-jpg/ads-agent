@@ -347,15 +347,15 @@ def get_amocrm_contacts(contact_ids):
     for i in range(0, len(unique_ids), batch_size):
         batch = unique_ids[i:i + batch_size]
         filter_str = "&".join([f"filter[id][]={cid}" for cid in batch])
-        data = amocrm_request(f"contacts?{filter_str}&with=leads")
+        data = amocrm_request(f"contacts?{filter_str}")
         if data:
             for c in (data.get("_embedded") or {}).get("contacts") or []:
                 name = c.get("name", "Без имени")
                 phone = ""
                 email = ""
-                for cf in c.get("custom_fields_values", []):
+                for cf in (c.get("custom_fields_values") or []):
                     field_code = cf.get("field_code", "")
-                    values = cf.get("values", [])
+                    values = cf.get("values") or []
                     if field_code == "PHONE" and values:
                         phone = values[0].get("value", "")
                     elif field_code == "EMAIL" and values:
@@ -559,7 +559,7 @@ def analyze_golden_clients(since=None, until=None):
     # Group by contact
     contact_deals = defaultdict(list)
     for d in deal_details:
-        for cid in d.get("contact_ids", []):
+        for cid in (d.get("contact_ids") or []):
             contact_deals[cid].append(d)
 
     # Fetch contact details (names, phones) from amoCRM
