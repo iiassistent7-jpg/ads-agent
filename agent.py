@@ -5,10 +5,12 @@ import requests
 import threading
 import schedule
 import re
+import tempfile
 from datetime import datetime, timedelta
 from collections import defaultdict
 import telebot
 import anthropic
+from openai import OpenAI
 
 # ============================================================
 # CONFIGURATION
@@ -18,6 +20,7 @@ MY_CHAT_ID = int(os.environ.get("MY_CHAT_ID", "0"))
 META_AD_ACCOUNT = os.environ.get("META_AD_ACCOUNT", "")
 META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "")
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_KEY", "")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 # amoCRM config
 AMOCRM_DOMAIN = os.environ.get("AMOCRM_DOMAIN", "istudiomkac.amocrm.ru")
@@ -27,6 +30,7 @@ ISRAEL_UTC_OFFSET = 2
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 claude = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # ============================================================
 # CLAUDE API WITH RETRY
@@ -1343,6 +1347,114 @@ def cmd_full(message):
     safe_send(MY_CHAT_ID, generate_response("полный отчёт по рекламе и продажам", data, "full_report"))
 
 # ============================================================
+# VOICE MESSAGE HANDLER
+# ============================================================
+def transcribe_voice(message):
+    """Download voice message from Telegram and transcribe with OpenAI Whisper."""
+    if not openai_client:
+        return None
+    try:
+        file_info = bot.get_file(message.voice.file_id)
+        file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_info.file_path}"
+        response = requests.get(file_url)
+        if response.status_code != 200:
+            return None
+
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+            tmp.write(response.content)
+            tmp_path = tmp.name
+
+        with open(tmp_path, "rb") as audio_file:
+            transcript = openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language="ru",
+            )
+
+        os.unlink(tmp_path)
+        return transcript.text
+    except Exception as e:
+        print(f"Voice transcription error: {e}")
+        try:
+            os.unlink(tmp_path)
+        except:
+            pass
+        return None
+
+@bot.message_handler(content_types=["voice", "video_note"])
+def handle_voice(message):
+    if message.chat.id != MY_CHAT_ID:
+        return
+    safe_send(MY_CHAT_ID, "🎙 Слушаю...")
+
+    text = transcribe_voice(message)
+    if not text:
+        safe_send(MY_CHAT_ID, "❌ Не удалось распознать голосовое. Попробуй текстом или перезапиши.")
+        return
+
+    safe_send(MY_CHAT_ID, f"✅ Понял: «{text}»")
+
+    # Process as regular text
+    intent = detect_intent(text)
+    print(f"Voice intent: {intent}")
+
+    show = intent.get("show", "spend")
+    period = intent.get("period", "today")
+    custom = intent.get("custom_dates")
+
+    since, until = None, None
+    if custom and isinstance(custom, dict):
+        since = custom.get("since")
+        until = custom.get("until")
+    elif period == "custom":
+        since, until = parse_custom_period(text)
+
+    if not since or not until:
+        since, until = get_date_range(period)
+
+    try:
+        if show == "all_campaigns":
+            data = fetch_all_campaigns_list()
+            safe_send(MY_CHAT_ID, generate_response(text, data))
+        elif show == "crm":
+            data = analyze_crm_data(since, until)
+            data.pop("_deal_details", None)
+            safe_send(MY_CHAT_ID, generate_response(text, data, "crm"))
+        elif show == "roi":
+            data = analyze_campaign_roi(since, until)
+            safe_send(MY_CHAT_ID, generate_response(text, data, "roi"))
+        elif show == "ltv":
+            data = analyze_ltv(since, until)
+            safe_send(MY_CHAT_ID, generate_response(text, data, "ltv"))
+        elif show == "funnel":
+            data = analyze_funnel(since, until)
+            safe_send(MY_CHAT_ID, generate_response(text, data, "funnel"))
+        elif show == "golden":
+            safe_send(MY_CHAT_ID, "⭐ Ищу золотых клиентов...\n⏳")
+            data = analyze_golden_clients(since, until)
+            safe_send(MY_CHAT_ID, generate_response(text, data, "golden"))
+        elif show == "full_report":
+            safe_send(MY_CHAT_ID, "📊 Собираю полный отчёт...\n⏳")
+            data = full_analytics(since, until)
+            safe_send(MY_CHAT_ID, generate_response(text, data, "full_report"))
+        elif show in ("budget_advice", "dead_campaigns"):
+            data = analyze_campaign_roi(since, until)
+            safe_send(MY_CHAT_ID, generate_response(text, data, show))
+        elif show == "best_source":
+            data = analyze_golden_clients(since, until)
+            safe_send(MY_CHAT_ID, generate_response(text, data, "best_source"))
+        elif show == "branch_compare":
+            data = analyze_crm_data(since, until)
+            data.pop("_deal_details", None)
+            safe_send(MY_CHAT_ID, generate_response(text, data, "branch_compare"))
+        else:
+            data = fetch_spend_data(period, since, until)
+            safe_send(MY_CHAT_ID, generate_response(text, data, "spend"))
+    except Exception as e:
+        print(f"Voice handler error: {e}")
+        safe_send(MY_CHAT_ID, f"❌ Ошибка: {str(e)[:200]}")
+
+# ============================================================
 # FREE-TEXT HANDLER
 # ============================================================
 @bot.message_handler(func=lambda m: m.chat.id == MY_CHAT_ID)
@@ -1436,6 +1548,7 @@ if __name__ == "__main__":
     print(f"📅 Israel time: {get_israel_now().strftime('%Y-%m-%d %H:%M')}")
     print(f"📊 amoCRM: {'✅ configured' if AMOCRM_TOKEN else '❌ no token'}")
     print(f"📊 Meta: {'✅ configured' if META_ACCESS_TOKEN else '❌ no token'}")
+    print(f"🎙 Voice: {'✅ OpenAI Whisper' if OPENAI_API_KEY else '❌ no key'}")
 
     # Clear any stuck webhooks/polling
     bot.delete_webhook(drop_pending_updates=True)
