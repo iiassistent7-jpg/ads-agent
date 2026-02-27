@@ -338,16 +338,34 @@ def get_all_amocrm_deals(max_pages=30, date_filter=None):
     return all_deals
 
 def get_amocrm_contacts(contact_ids):
-    """Fetch contacts by IDs (batch)."""
+    """Fetch contacts by IDs (batch) with name and phone."""
     contacts = {}
+    if not contact_ids:
+        return contacts
+    unique_ids = list(set(contact_ids))
     batch_size = 50
-    for i in range(0, len(contact_ids), batch_size):
-        batch = contact_ids[i:i + batch_size]
+    for i in range(0, len(unique_ids), batch_size):
+        batch = unique_ids[i:i + batch_size]
         filter_str = "&".join([f"filter[id][]={cid}" for cid in batch])
-        data = amocrm_request(f"contacts?{filter_str}")
+        data = amocrm_request(f"contacts?{filter_str}&with=leads")
         if data:
             for c in data.get("_embedded", {}).get("contacts", []):
-                contacts[c["id"]] = c
+                name = c.get("name", "Без имени")
+                phone = ""
+                email = ""
+                for cf in c.get("custom_fields_values", []):
+                    field_code = cf.get("field_code", "")
+                    values = cf.get("values", [])
+                    if field_code == "PHONE" and values:
+                        phone = values[0].get("value", "")
+                    elif field_code == "EMAIL" and values:
+                        email = values[0].get("value", "")
+                contacts[c["id"]] = {
+                    "id": c["id"],
+                    "name": name,
+                    "phone": phone,
+                    "email": email,
+                }
         time.sleep(0.3)
     return contacts
 
@@ -531,7 +549,7 @@ def analyze_crm_data(since=None, until=None):
     }
 
 def analyze_golden_clients(since=None, until=None):
-    """Find golden clients — repeat buyers, high LTV, long retention."""
+    """Find golden clients — repeat buyers, high LTV, long retention. With names and phones."""
     crm = analyze_crm_data(since, until)
     if "error" in crm:
         return crm
@@ -543,6 +561,11 @@ def analyze_golden_clients(since=None, until=None):
     for d in deal_details:
         for cid in d.get("contact_ids", []):
             contact_deals[cid].append(d)
+
+    # Fetch contact details (names, phones) from amoCRM
+    all_contact_ids = list(contact_deals.keys())
+    print(f"Fetching {len(all_contact_ids)} contacts from amoCRM...")
+    contact_info_map = get_amocrm_contacts(all_contact_ids)
 
     # Analyze each contact
     golden_clients = []
@@ -556,6 +579,7 @@ def analyze_golden_clients(since=None, until=None):
         campaigns = list(set(d["campaign_tag"] for d in deals if d["campaign_tag"]))
         fb_tags = list(set(d["fb_tag"] for d in deals if d["fb_tag"]))
         branches = list(set(d["branch"] for d in deals))
+        deal_names = list(set(d["name"] for d in deals if d["name"]))
 
         # Calculate client lifetime
         dates = [d["created_at"] for d in deals if d["created_at"]]
@@ -564,14 +588,24 @@ def analyze_golden_clients(since=None, until=None):
         else:
             lifetime_days = 0
 
+        # Get contact name and phone
+        cinfo = contact_info_map.get(cid, {})
+        client_name = cinfo.get("name", "Без имени")
+        client_phone = cinfo.get("phone", "")
+        client_email = cinfo.get("email", "")
+
         client_info = {
             "contact_id": cid,
+            "name": client_name,
+            "phone": client_phone,
+            "email": client_email,
             "total_spent": total_spent,
             "deal_count": deal_count,
             "won_count": won_count,
             "campaigns": campaigns[:5],
             "fb_tags": fb_tags[:5],
             "branches": branches,
+            "procedures": deal_names[:5],
             "lifetime_days": round(lifetime_days),
             "first_deal": min(dates) if dates else 0,
             "last_deal": max(dates) if dates else 0,
@@ -964,14 +998,24 @@ ANALYST_PROMPT = """Ты — личный бизнес-аналитик для �
 8. Валюта расходов Meta — $, выручка amoCRM — ₪.
 9. НЕ задавай вопросов в конце ответа.
 10. Максимум 3000 символов — коротко но по делу.
-11. НИКОГДА не используй **звёздочки**, __подчёркивания__, ##заголовки или другую Markdown-разметку. Только чистый текст и эмодзи.
+11. НИКОГДА не используй **звёздочки**, __подчёркивания__, ## заголовки или другую Markdown-разметку. Только чистый текст и эмодзи. Пиши чистым текстом.
+12. Когда в данных есть имена и телефоны клиентов — ОБЯЗАТЕЛЬНО показывай их. Формат: "Имя — телефон — сколько принёс — сколько визитов — откуда пришёл". Это важнейшая информация для владельца.
+13. Преобразуй даты из timestamp в человеческий формат (например "15 января 2025").
 
-ПРИМЕР ХОРОШЕГО ОТВЕТА:
-"🔥 Карбон ИВР — твоя золотая жила! С неё пришли 15 постоянных клиентов, 
-которые принесли в среднем ₪2,400 каждый. При том что одно обращение стоит всего $5.
+ПРИМЕР ХОРОШЕГО ОТВЕТА для золотых клиентов:
+"🏆 Твоя топ-20 золотых клиентов за полгода:
 
-💀 А вот B-Flexy Русский — сливает бюджет. 362 обращения, но клиенты уходят после первого визита. 
-Средний чек всего ₪29. Либо меняй посадочную, либо выключай."
+1. Мария Иванова — +972-50-123-4567
+   Принесла ₪9,550 за 21 визит (средний чек ₪455)
+   Пришла с кампании: Карбон ИВР
+   С нами уже 340 дней
+
+2. Анна Петрова — +972-54-987-6543
+   Принесла ₪7,850 за 10 визитов (средний чек ₪785)
+   Пришла с кампании: 3 зоны за 999
+   С нами 280 дней
+
+💡 Вывод: кампания Карбон ИВР приводит самых лояльных клиентов."
 
 ОРИЕНТИРЫ:
 - Хорошая стоимость обращения: $3-5
