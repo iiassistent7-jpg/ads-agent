@@ -686,7 +686,7 @@ def analyze_golden_clients(since=None, until=None):
     golden_clients.sort(key=lambda x: x["total_spent"], reverse=True)
     repeat_clients.sort(key=lambda x: x["total_spent"], reverse=True)
 
-    # Which campaigns produce golden clients?
+    # Which campaigns produce golden clients? (by manual tag)
     campaign_quality = defaultdict(lambda: {"golden": 0, "repeat": 0, "one_time": 0, "total_ltv": 0})
     for c in golden_clients:
         for camp in c["campaigns"]:
@@ -700,6 +700,24 @@ def analyze_golden_clients(since=None, until=None):
         for camp in c["campaigns"]:
             campaign_quality[camp]["one_time"] += 1
             campaign_quality[camp]["total_ltv"] += c["total_spent"]
+
+    # ALSO analyze by specific fb-tag (unique Facebook campaign ID)
+    fb_tag_quality = defaultdict(lambda: {"golden": 0, "repeat": 0, "one_time": 0, "total_ltv": 0, "manual_tags": set()})
+    for c in golden_clients:
+        for ft in c["fb_tags"]:
+            fb_tag_quality[ft]["golden"] += 1
+            fb_tag_quality[ft]["total_ltv"] += c["total_spent"]
+            fb_tag_quality[ft]["manual_tags"].update(c["campaigns"])
+    for c in repeat_clients:
+        for ft in c["fb_tags"]:
+            fb_tag_quality[ft]["repeat"] += 1
+            fb_tag_quality[ft]["total_ltv"] += c["total_spent"]
+            fb_tag_quality[ft]["manual_tags"].update(c["campaigns"])
+    for c in one_time_clients:
+        for ft in c["fb_tags"]:
+            fb_tag_quality[ft]["one_time"] += 1
+            fb_tag_quality[ft]["total_ltv"] += c["total_spent"]
+            fb_tag_quality[ft]["manual_tags"].update(c["campaigns"])
 
     # Convert to serializable dict and add avg LTV
     campaign_quality_clean = {}
@@ -716,6 +734,41 @@ def analyze_golden_clients(since=None, until=None):
         }
 
     sorted_quality = sorted(campaign_quality_clean.items(), key=lambda x: x[1]["quality_score"], reverse=True)
+
+    # Process fb_tag quality — match with Meta campaign names
+    # First try to get Meta campaign names for fb_tags
+    fb_to_meta_name = {}
+    try:
+        all_meta_campaigns = get_all_campaigns("name,id")
+        for mc in all_meta_campaigns:
+            meta_id = mc.get("id", "")
+            meta_name = mc.get("name", "")
+            # fb-tag is like "fb14285258249" — the number is campaign ID
+            fb_key = f"fb{meta_id}"
+            fb_to_meta_name[fb_key] = meta_name
+    except:
+        pass
+
+    fb_tag_quality_clean = {}
+    for ft, data in fb_tag_quality.items():
+        total_clients = data["golden"] + data["repeat"] + data["one_time"]
+        if total_clients < 1:
+            continue
+        meta_name = fb_to_meta_name.get(ft, "")
+        fb_tag_quality_clean[ft] = {
+            "fb_tag": ft,
+            "meta_campaign_name": meta_name if meta_name else "Не найдена в Meta (возможно удалена)",
+            "manual_tag_group": ", ".join(data["manual_tags"]) if data["manual_tags"] else "Без тега",
+            "golden_clients": data["golden"],
+            "repeat_clients": data["repeat"],
+            "one_time_clients": data["one_time"],
+            "total_clients": total_clients,
+            "total_ltv": data["total_ltv"],
+            "avg_ltv_per_client": round(data["total_ltv"] / total_clients, 0) if total_clients > 0 else 0,
+            "quality_score": round((data["golden"] * 3 + data["repeat"] * 1.5) / max(total_clients, 1) * 100, 1),
+        }
+
+    sorted_fb_quality = sorted(fb_tag_quality_clean.items(), key=lambda x: x[1]["quality_score"], reverse=True)
 
     # Source breakdown: Ads vs Referral
     all_clients = golden_clients + repeat_clients + one_time_clients
@@ -745,6 +798,7 @@ def analyze_golden_clients(since=None, until=None):
         "top_golden": golden_clients[:15],
         "top_repeat": repeat_clients[:10],
         "campaign_quality": dict(sorted_quality[:15]),
+        "fb_campaign_quality": dict(sorted_fb_quality[:20]),
         "source_breakdown": source_breakdown,
         "total_golden_revenue": sum(c["total_spent"] for c in golden_clients),
         "total_repeat_revenue": sum(c["total_spent"] for c in repeat_clients),
@@ -1138,7 +1192,7 @@ ANALYST_PROMPT = """Ты — личный бизнес-аналитик для �
 8. Валюта расходов Meta — $, выручка amoCRM — ₪.
 9. НЕ задавай вопросов в конце ответа.
 10. Максимум 3000 символов — коротко но по делу.
-11. АБСОЛЮТНЫЙ ЗАПРЕТ НА ФОРМАТИРОВАНИЕ: Не используй звёздочки (*), подчёркивания (_), решётки (#), обратные кавычки, или любую другую Markdown-разметку. Пиши ТОЛЬКО чистый текст. Вместо жирного текста используй КАПС или эмодзи для выделения. Это критически важное правило.
+11. НИКОГДА не используй **звёздочки**, __подчёркивания__, ## заголовки или другую Markdown-разметку. Только чистый текст и эмодзи. Пиши чистым текстом.
 12. Когда в данных есть имена и телефоны клиентов — ОБЯЗАТЕЛЬНО показывай их. Формат: "Имя — телефон — сколько принёс — сколько визитов — откуда пришёл". Это важнейшая информация для владельца.
 13. Преобразуй даты из timestamp в человеческий формат (например "15 января 2025").
 
@@ -1168,6 +1222,16 @@ ANALYST_PROMPT = """Ты — личный бизнес-аналитик для �
 - Ашдод закрыт, Раат продан — их данные отфильтрованы
 - Если в данных есть "branch_filter" — скажи какой фильтр применён
 - "Не указан" в филиале = скорее всего Ришон (у многих клиентов город слетел при удалении Раата из CRM)
+
+КОНТЕКСТ ПО ТЕГАМ КАМПАНИЙ:
+- В amoCRM у каждой сделки может быть ДВА типа тегов:
+  1. fb-тег (например fb14285258249) — уникальный ID конкретной кампании в Facebook. Это автоматический тег.
+  2. Ручной тег (например "Карбон ИВР 250+2") — общая группа кампаний, присвоенная владельцем.
+- За одним ручным тегом может стоять НЕСКОЛЬКО разных кампаний Facebook с разной эффективностью.
+- Когда пользователь спрашивает "какую кампанию масштабировать" — давай КОНКРЕТНЫЙ fb-тег и название из Meta Ads, а не общий ручной тег.
+- В данных fb_campaign_quality показывает эффективность КАЖДОЙ конкретной Facebook кампании.
+- Поле meta_campaign_name — это реальное название кампании в Facebook Ads Manager.
+- Если meta_campaign_name пустое или "Не найдена" — кампания могла быть удалена из Meta, но клиенты с неё остались в CRM.
 """
 
 def generate_response(user_text, data, data_type="spend"):
@@ -1281,6 +1345,36 @@ def fetch_spend_data(period, since=None, until=None):
     insights = get_account_insights(since, until)
     campaigns = enrich_insights(insights)
     total_spend = sum(c["spend"] for c in campaigns)
+
+    # If today returns $0 — also fetch yesterday and active campaigns for context
+    if period == "today" and total_spend == 0:
+        y_since, y_until = get_date_range("yesterday")
+        y_insights = get_account_insights(y_since, y_until)
+        y_campaigns = enrich_insights(y_insights)
+        y_spend = sum(c["spend"] for c in y_campaigns)
+
+        # Also get active campaigns list
+        try:
+            all_camps = get_all_campaigns("name,effective_status")
+            active_names = [c.get("name", "—") for c in all_camps if c.get("effective_status") == "ACTIVE"]
+            paused_count = len([c for c in all_camps if c.get("effective_status") == "PAUSED"])
+        except:
+            active_names = []
+            paused_count = 0
+
+        return {
+            "period": period, "since": since, "until": until,
+            "campaigns": campaigns, "total_spend": 0,
+            "note": "Meta API ещё не обновил данные за сегодня (задержка до нескольких часов). Показываю вчерашние данные для контекста.",
+            "yesterday_data": {
+                "since": y_since, "until": y_until,
+                "campaigns": y_campaigns, "total_spend": round(y_spend, 2),
+            },
+            "active_campaigns": active_names,
+            "active_count": len(active_names),
+            "paused_count": paused_count,
+        }
+
     return {"period": period, "since": since, "until": until, "campaigns": campaigns, "total_spend": round(total_spend, 2)}
 
 def fetch_all_campaigns_list():
@@ -1428,6 +1522,95 @@ def cmd_full(message):
     safe_send(MY_CHAT_ID, "📊 Собираю полный отчёт: Meta Ads + Центр лидов + amoCRM...\n⏳")
     data = full_analytics()
     safe_send(MY_CHAT_ID, generate_response("полный отчёт по рекламе и продажам", data, "full_report"))
+
+@bot.message_handler(commands=["debug"])
+def cmd_debug(message):
+    if message.chat.id != MY_CHAT_ID:
+        return
+    safe_send(MY_CHAT_ID, "🔍 Диагностика amoCRM...\n⏳")
+
+    report = "🔧 ДИАГНОСТИКА amoCRM\n\n"
+
+    # 1. Pipelines
+    pipelines = get_amocrm_pipelines()
+    report += "📋 ВОРОНКИ:\n"
+    for p in pipelines:
+        report += f"\n  Воронка: {p['name']} (ID: {p['id']})\n"
+        report += f"  Этапы: {', '.join(s['name'] for s in p['stages'])}\n"
+
+    # 2. Get recent deals from "Неразобранные" and others — sample 20
+    report += "\n\n📊 ПОСЛЕДНИЕ 20 СДЕЛОК (полные поля):\n"
+    data = amocrm_request("leads", {"limit": 20, "order[created_at]": "desc", "with": "contacts"})
+    if data:
+        deals = (data.get("_embedded") or {}).get("leads") or []
+        all_tags_found = set()
+        all_sources_found = set()
+        all_pipelines_found = set()
+
+        for i, deal in enumerate(deals[:20]):
+            tags = get_deal_tags(deal)
+            all_tags_found.update(tags)
+            pipeline_id = deal.get("pipeline_id", 0)
+            all_pipelines_found.add(pipeline_id)
+
+            # Get custom fields
+            custom_fields = {}
+            for cf in (deal.get("custom_fields_values") or []):
+                field_name = cf.get("field_name", cf.get("field_id", "?"))
+                values = cf.get("values") or []
+                val = values[0].get("value", "") if values else ""
+                custom_fields[field_name] = val
+
+            # Source info
+            source_info = deal.get("_embedded", {}) or {}
+            source = source_info.get("source", {}) if isinstance(source_info, dict) else {}
+
+            report += f"\n  --- Сделка #{i+1} ---\n"
+            report += f"  Имя: {deal.get('name', '?')}\n"
+            report += f"  Цена: {deal.get('price', 0)}\n"
+            report += f"  Pipeline ID: {pipeline_id}\n"
+            report += f"  Status ID: {deal.get('status_id', 0)}\n"
+            report += f"  Теги: {tags if tags else 'НЕТ'}\n"
+            if custom_fields:
+                report += f"  Доп.поля: {json.dumps(custom_fields, ensure_ascii=False)}\n"
+            report += f"  Source (embedded): {json.dumps(source, ensure_ascii=False, default=str)[:200]}\n"
+
+            # Check for _source field at top level
+            for key in deal:
+                if "source" in key.lower() or "utm" in key.lower() or "origin" in key.lower():
+                    report += f"  {key}: {deal[key]}\n"
+
+        report += f"\n\n📈 СВОДКА:\n"
+        report += f"  Все найденные теги: {sorted(all_tags_found) if all_tags_found else 'НЕТ ТЕГОВ'}\n"
+        report += f"  Pipeline IDs: {sorted(all_pipelines_found)}\n"
+
+    # 3. Check for "Заявка с сайта" tag
+    report += "\n\n🔎 ПОИСК ТЕГА 'Заявка с сайта':\n"
+    search_data = amocrm_request("leads", {
+        "limit": 5,
+        "filter[tags_name][]": "Заявка с сайта",
+    })
+    if search_data:
+        found_deals = (search_data.get("_embedded") or {}).get("leads") or []
+        report += f"  Найдено сделок с тегом: {len(found_deals)}\n"
+        for d in found_deals[:3]:
+            report += f"  - {d.get('name', '?')} | Цена: {d.get('price', 0)} | Теги: {get_deal_tags(d)}\n"
+    else:
+        report += "  Тег не найден\n"
+
+    # 4. Search for site/google related tags
+    report += "\n🔎 ПОИСК ДРУГИХ ТЕГОВ (сайт, google, site, web, gmap):\n"
+    for search_tag in ["сайт", "site", "google", "web", "gmap", "Google Maps", "Гугл"]:
+        search_data = amocrm_request("leads", {
+            "limit": 3,
+            "filter[tags_name][]": search_tag,
+        })
+        if search_data:
+            found = (search_data.get("_embedded") or {}).get("leads") or []
+            if found:
+                report += f"  Тег '{search_tag}': {len(found)} сделок\n"
+
+    safe_send(MY_CHAT_ID, report)
 
 # ============================================================
 # VOICE MESSAGE HANDLER
