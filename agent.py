@@ -1468,7 +1468,7 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
-            browser = p.chromium.launch(executable_path="/usr/bin/chromium", headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'])
+            browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'])
             page = browser.new_page(viewport={"width": 1080, "height": 800}, device_scale_factor=2)
             page.goto(f"file://{html_path}", wait_until="networkidle")
             page.wait_for_timeout(1500)
