@@ -579,7 +579,39 @@ def analyze_crm_data(since=None, until=None):
             by_campaign_tag[tag_key]["avg_deal"] = 0
 
     sorted_campaigns = sorted(by_campaign_tag.items(), key=lambda x: x[1]["revenue"], reverse=True)
-
+# Split by pipeline
+    PIPELINE_WORKING = 5896168
+    PIPELINE_PERMANENT = 8703286
+    
+    working_funnel = {"total": 0, "stages": {}, "revenue": 0, "won": 0, "lost": 0}
+    permanent_funnel = {"total": 0, "stages": {}, "revenue": 0, "won": 0, "lost": 0}
+    
+    for deal in deals:
+        tags = get_deal_tags(deal)
+        branch = get_deal_branch(tags)
+        if not should_filter_branch(branch, since, until):
+            continue
+        pid = deal.get("pipeline_id", 0)
+        price = deal.get("price", 0) or 0
+        stage_id = deal.get("status_id", 0)
+        stage_name = stage_map.get(stage_id, f"Stage {stage_id}")
+        
+        if pid == PIPELINE_WORKING:
+            working_funnel["total"] += 1
+            working_funnel["revenue"] += price
+            working_funnel["stages"][stage_name] = working_funnel["stages"].get(stage_name, 0) + 1
+            if stage_id in closed_won_ids:
+                working_funnel["won"] += 1
+            elif stage_id in closed_lost_ids:
+                working_funnel["lost"] += 1
+        elif pid == PIPELINE_PERMANENT:
+            permanent_funnel["total"] += 1
+            permanent_funnel["revenue"] += price
+            permanent_funnel["stages"][stage_name] = permanent_funnel["stages"].get(stage_name, 0) + 1
+            if stage_id in closed_won_ids:
+                permanent_funnel["won"] += 1
+            elif stage_id in closed_lost_ids:
+                permanent_funnel["lost"] += 1
     return {
         "total_deals": total_deals,
         "filtered_out_deals": filtered_out,
@@ -591,6 +623,8 @@ def analyze_crm_data(since=None, until=None):
         "lost_deals": lost_deals,
         "conversion_rate": round(len(won_deals) / total_deals * 100, 1) if total_deals > 0 else 0,
         "by_stage": by_stage,
+        "working_funnel": working_funnel,
+        "permanent_funnel": permanent_funnel,
         "by_branch": by_branch,
         "by_source": dict(list(sorted(by_source.items(), key=lambda x: x[1]["revenue"], reverse=True))[:20]),
         "by_campaign_tag": dict(sorted_campaigns[:15]),
