@@ -2039,8 +2039,8 @@ def handle_text(message):
             safe_send(MY_CHAT_ID, "🏢 Сравниваю филиалы...\n⏳")
             data = analyze_crm_data(since, until)
             data.pop("_deal_details", None)
-            safe_send(MY_CHAT_ID, generate_response(user_text, data, "branch_compare"))
-            elif show == "dashboard":
+            safe_send(MY_CHAT_ID, generate_response(user_text, data, "branch_compare"))            
+        elif show == "dashboard":
             safe_send(MY_CHAT_ID, "📊 Генерирую дашборд...\n⏳")
             data = full_analytics(since, until)
             period_names = {"today": "Сегодня", "yesterday": "Вчера", "week": "Неделя", "month": "Месяц", "3months": "3 месяца", "6months": "Полгода", "year": "Год", "all": "Всё время"}
