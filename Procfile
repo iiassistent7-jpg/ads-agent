@@ -1,1 +1,1 @@
-worker: playwright install chromium && python agent.py
+worker: playwright install --with-deps chromium && python agent.py
