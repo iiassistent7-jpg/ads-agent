@@ -1718,6 +1718,20 @@ def cmd_full(message):
     data = full_analytics()
     safe_send(MY_CHAT_ID, generate_response("полный отчёт по рекламе и продажам", data, "full_report"))
 
+@bot.message_handler(commands=["dashboard"])
+def cmd_dashboard(message):
+    if message.chat.id != MY_CHAT_ID:
+        return
+    safe_send(MY_CHAT_ID, "📊 Генерирую дашборд...\n⏳ 10-15 секунд")
+    try:
+        data = full_analytics()
+        png_path = generate_dashboard_png(data, "Последние 30 дней")
+        with open(png_path, 'rb') as photo:
+            bot.send_photo(MY_CHAT_ID, photo, caption="📊 iStudio Performance Dashboard")
+        os.unlink(png_path)
+    except Exception as e:
+        print(f"Dashboard error: {e}")
+        safe_send(MY_CHAT_ID, f"❌ Ошибка генерации дашборда: {str(e)[:200]}")
 @bot.message_handler(commands=["debug"])
 def cmd_debug(message):
     if message.chat.id != MY_CHAT_ID:
