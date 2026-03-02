@@ -1023,6 +1023,8 @@ def full_analytics(since=None, until=None):
             "conversion": crm["conversion_rate"],
             "by_campaign_tag": crm["by_campaign_tag"],
             "by_branch": crm["by_branch"],
+            "working_funnel": crm.get("working_funnel", {}),
+            "permanent_funnel": crm.get("permanent_funnel", {}),
         },
         "overall_roi": round((crm["total_revenue"] - total_meta_spend) / total_meta_spend * 100, 1) if total_meta_spend > 0 else 0,
     }
@@ -2003,6 +2005,8 @@ def handle_voice(message):
             with open(png_path, 'rb') as photo:
                 bot.send_photo(MY_CHAT_ID, photo, caption=f"📊 iStudio Dashboard · {plabel}")
             os.unlink(png_path)
+            summary = generate_response(user_text, data, "full_report")
+            safe_send(MY_CHAT_ID, summary)
         else:
             data = fetch_spend_data(period, since, until)
             safe_send(MY_CHAT_ID, generate_response(text, data, "spend"))
