@@ -6,7 +6,6 @@ import threading
 import schedule
 import re
 import tempfile
-from playwright.sync_api import sync_playwright
 from datetime import datetime, timedelta
 from collections import defaultdict
 import telebot
