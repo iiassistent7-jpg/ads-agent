@@ -843,6 +843,8 @@ def analyze_golden_clients(since=None, until=None):
             "total_deals": crm["total_deals"],
             "total_revenue": crm["total_revenue"],
             "by_campaign_tag": crm["by_campaign_tag"],
+            "working_funnel": crm.get("working_funnel", {}),
+            "permanent_funnel": crm.get("permanent_funnel", {}),
         },
     }
 
@@ -1366,29 +1368,52 @@ def generate_dashboard_png(data, period_label="Сегодня"):
         camps_html += f'<div class="cr"><span class="c0">{i+1}</span><span class="c1">{nm}</span><span class="c2">{"$"+f"{sp:,.0f}" if sp>0 else "—"}</span><span class="c3">{le if le>0 else "—"}</span><span class="c4 {cls}">{val}</span></div>'
     if not camps_html:
         camps_html = '<div class="cr" style="justify-content:center;color:#6b6b80">Нет данных</div>'
-    steps = []
-    if total_leads > 0 or total_deals > 0:
-        imps = sum(c.get("impressions", 0) for c in data.get("campaigns", [])) if "campaigns" in data else 0
-        clks = sum(c.get("clicks", 0) for c in data.get("campaigns", [])) if "campaigns" in data else 0
-        if imps > 0: steps.append(("Показы", imps, 100, "#3b82f6", "#60a5fa"))
-        if clks > 0: steps.append(("Клики", clks, min(75, max(20, clks/max(imps,1)*100*30)), "#8b5cf6", "#a78bfa"))
-        if total_leads > 0: steps.append(("Лиды", total_leads, 55, "#f0c040", "#fbbf24"))
-        if total_deals > 0: steps.append(("Сделки", total_deals, 42, "#f97316", "#fb923c"))
-        if won_deals > 0: steps.append(("Продажи", won_deals, 25, "#22c55e", "#4ade80"))
-    if not steps and total_deals > 0:
-        steps = [("Сделки", total_deals, 70, "#f97316", "#fb923c"), ("Продажи", won_deals, 35, "#22c55e", "#4ade80")]
-    funnel_html = ""
-    for i, (lb, vl, w, c1, c2) in enumerate(steps):
-        ct, cc = "", ""
-        if i > 0 and steps[i-1][1] > 0:
-            r = round(vl / steps[i-1][1] * 100, 1)
-            ct = f"{r}%"
-            cc = "good" if r >= 50 else ("warn" if r >= 20 else "bad")
-        conn = '<div class="fc"></div>' if i > 0 else ""
-        vis = ' style="visibility:hidden"' if i == 0 else ""
-        funnel_html += f'{conn}<div class="fs"><div class="fv {cc}"{vis}>{ct or "—"}</div><div class="fw"><div class="fb" style="width:{w}%;background:linear-gradient(135deg,{c1},{c2})"><span class="ft">{vl:,}</span><span class="fl">{lb}</span></div></div></div>'
-    if not funnel_html:
-        funnel_html = '<div style="text-align:center;color:#6b6b80;padding:20px">Недостаточно данных</div>'
+   # === Working funnel (new clients from ads) ===
+    wf = data.get("crm", data).get("working_funnel", data.get("working_funnel", {}))
+    pf = data.get("crm", data).get("permanent_funnel", data.get("permanent_funnel", {}))
+    
+    def build_funnel_html(funnel_data, color1, color2):
+        if not funnel_data or funnel_data.get("total", 0) == 0:
+            return '<div style="text-align:center;color:#6b6b80;padding:16px">Нет данных</div>'
+        total = funnel_data["total"]
+        won = funnel_data.get("won", 0)
+        lost = funnel_data.get("lost", 0)
+        in_progress = total - won - lost
+        stages_list = [
+            ("Всего заявок", total, 100),
+            ("В работе", in_progress, max(15, in_progress/max(total,1)*100)),
+            ("Выполнено", won, max(10, won/max(total,1)*100)),
+            ("Отказ", lost, max(8, lost/max(total,1)*100)),
+        ]
+        html = ""
+        for i, (label, val, w) in enumerate(stages_list):
+            if val == 0 and label in ("В работе",):
+                continue
+            pct = ""
+            cls = ""
+            if i > 0 and stages_list[0][1] > 0:
+                r = round(val / stages_list[0][1] * 100, 1)
+                pct = f"{r}%"
+                cls = "good" if r >= 40 else ("warn" if r >= 15 else "bad")
+            if label == "Отказ":
+                c1, c2 = "#ef4444", "#f87171"
+            elif label == "Выполнено":
+                c1, c2 = "#22c55e", "#4ade80"
+            else:
+                c1, c2 = color1, color2
+            conn = '<div class="fc"></div>' if i > 0 else ""
+            vis = ' style="visibility:hidden"' if i == 0 else ""
+            html += f'{conn}<div class="fs"><div class="fv {cls}"{vis}>{pct or "—"}</div><div class="fw"><div class="fb" style="width:{w}%;background:linear-gradient(135deg,{c1},{c2})"><span class="ft">{val:,}</span><span class="fl">{label}</span></div></div></div>'
+        rev = funnel_data.get("revenue", 0)
+        conv = round(won/total*100, 1) if total > 0 else 0
+        html += f'<div style="display:flex;justify-content:center;gap:24px;margin-top:16px;font-size:13px">'
+        html += f'<span style="color:#22c55e">Конверсия: {conv}%</span>'
+        html += f'<span style="color:#f0c040">Выручка: ₪{rev:,.0f}</span>'
+        html += f'</div>'
+        return html
+    
+    working_funnel_html = build_funnel_html(wf, "#3b82f6", "#60a5fa")
+    permanent_funnel_html = build_funnel_html(pf, "#a855f7", "#c084fc")
     if total_revenue > 0 and total_spend > 0:
         profit_ok = (total_revenue - total_spend * 3.6) > 0
         status_txt = "БИЗНЕС В ПЛЮСЕ" if profit_ok else "ТРЕБУЕТ ВНИМАНИЯ"
@@ -1431,7 +1456,7 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 .card{{background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:18px;padding:22px;position:relative;overflow:hidden;backdrop-filter:blur(20px);box-shadow:0 4px 24px rgba(0,0,0,.4),0 1px 0 rgba(255,255,255,.04)inset,0 -2px 8px rgba(0,0,0,.2)inset;transform:perspective(800px)rotateX(1deg)}}
 .card::before{{content:'';position:absolute;top:0;left:0;right:0;height:50%;background:linear-gradient(180deg,rgba(255,255,255,.04),transparent);border-radius:18px 18px 0 0;pointer-events:none}}
 .cl{{font-size:9px;color:#6b6b80;text-transform:uppercase;letter-spacing:2.5px;margin-bottom:10px}}
-.cv{{font-family:'Unbounded',sans-serif;font-size:30px;font-weight:700;line-height:1;text-shadow:0 2px 8px rgba(0,0,0,.3)}}
+.cv{{font-family:'Unbounded',sans-serif;font-size:34px;font-weight:700;line-height:1;text-shadow:0 2px 8px rgba(0,0,0,.3)}}
 .sec{{font-family:'Unbounded',sans-serif;font-size:10px;font-weight:600;color:#6b6b80;letter-spacing:4px;text-transform:uppercase;margin:32px 0 16px;display:flex;align-items:center;gap:12px}}
 .sec::after{{content:'';flex:1;height:1px;background:linear-gradient(90deg,rgba(255,255,255,.06),transparent)}}
 .fcard{{background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:18px;padding:28px 24px;margin-bottom:14px;backdrop-filter:blur(20px);box-shadow:0 8px 32px rgba(0,0,0,.5),0 1px 0 rgba(255,255,255,.04)inset;overflow:hidden}}
@@ -1440,8 +1465,8 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 .fw{{flex:1;display:flex;justify-content:center}}
 .fb{{height:46px;border-radius:10px;display:flex;align-items:center;justify-content:center;position:relative;box-shadow:0 4px 16px rgba(0,0,0,.4),0 2px 0 rgba(255,255,255,.15)inset;transform:perspective(500px)rotateX(2deg)}}
 .fb::after{{content:'';position:absolute;top:0;left:0;right:0;height:50%;background:linear-gradient(180deg,rgba(255,255,255,.18),transparent);border-radius:10px 10px 0 0;pointer-events:none}}
-.ft{{font-family:'Unbounded',sans-serif;font-size:17px;font-weight:700;color:#fff;text-shadow:0 2px 4px rgba(0,0,0,.4);position:relative;z-index:1}}
-.fl{{position:absolute;right:-140px;font-size:11px;color:#6b6b80;text-transform:uppercase;letter-spacing:1px;white-space:nowrap;width:130px;z-index:1}}
+.ft{{font-family:'Unbounded',sans-serif;font-size:20px;font-weight:700;color:#fff;text-shadow:0 2px 4px rgba(0,0,0,.4);position:relative;z-index:1}}
+.fl{{position:absolute;right:-140px;font-size:13px;color:#6b6b80;text-transform:uppercase;letter-spacing:1px;white-space:nowrap;width:130px;z-index:1}}
 .fv{{position:absolute;left:-60px;font-size:11px;font-weight:600;white-space:nowrap;width:50px;text-align:right}}
 .fv.good{{color:#22c55e}}.fv.warn{{color:#f97316}}.fv.bad{{color:#ef4444}}
 .fc{{width:2px;height:6px;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.02));margin:0 auto}}
@@ -1470,8 +1495,10 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 <div class="card"><div class="cl">Лиды</div><div class="cv">{total_leads}</div></div>
 <div class="card"><div class="cl">CPL</div><div class="cv">${avg_cpl:.2f}</div></div>
 <div class="card"><div class="cl">Конверсия</div><div class="cv">{conversion}%</div></div></div>
-<div class="sec">Воронка продаж</div>
-<div class="fcard"><div class="fn">{funnel_html}</div></div>
+<div class="sec">Рабочая воронка (новые клиенты)</div>
+<div class="fcard"><div class="fn">{working_funnel_html}</div></div>
+<div class="sec">Постоянные клиенты</div>
+<div class="fcard"><div class="fn">{permanent_funnel_html}</div></div>
 <div class="sec">amoCRM</div>
 <div class="g4">
 <div class="card"><div class="cl">Сделок</div><div class="cv">{total_deals}</div></div>
