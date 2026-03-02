@@ -1083,7 +1083,7 @@ INTENT_PROMPT = """Парсер запросов рекламного/CRM бот
 {"period": "month", "show": "spend", "custom_dates": null}
 
 period: today | yesterday | week | month | 3months | 6months | year | all | custom
-show: spend | all_campaigns | crm | roi | ltv | funnel | golden | full_report | budget_advice | dead_campaigns | best_source | branch_compare
+show: spend | all_campaigns | crm | roi | ltv | funnel | golden | full_report | budget_advice | dead_campaigns | best_source | branch_compare | dashboard
 custom_dates: null или {"since": "YYYY-MM-DD", "until": "YYYY-MM-DD"} — ОБЯЗАТЕЛЬНО вычисли даты если указан конкретный период
 
 ПРАВИЛА ДЛЯ ПЕРИОДОВ:
@@ -1123,7 +1123,8 @@ CRM и продажи:
 - "рекомендации или реклама", "сарафан", "сарафанное радио" → golden
 
 Расширенная аналитика:
-- "полный отчёт", "вся аналитика", "общая картина", "дашборд" → full_report
+- "полный отчёт", "вся аналитика", "общая картина" → full_report
+- "дашборд", "dashboard", "картинка", "png", "визуал" → dashboard
 - "куда вложить бюджет", "как распределить бюджет", "совет по бюджету" → budget_advice
 - "мёртвые кампании", "что выключить", "что не работает", "сливают бюджет", "убрать" → dead_campaigns
 - "лучший источник", "откуда клиенты", "какой канал лучше", "источники" → best_source
@@ -1186,7 +1187,7 @@ def detect_intent(user_text):
         show = "all_campaigns"
     elif any(w in text for w in ["золот", "лучшие клиенты", "постоянн", "лояльн", "вип", "vip", "кто остал", "долги", "сарафан", "рекомендац", "откуда лучш"]):
         show = "golden"
-    elif any(w in text for w in ["полный отчёт", "полный отчет", "общая картина", "дашборд", "вся аналитика"]):
+    elif any(w in text for w in ["полный отчёт", "полный отчет", "общая картина", "вся аналитика"]):
         show = "full_report"
     elif any(w in text for w in ["мёртв", "мертв", "выключить", "не работа", "слива", "убрать", "убить"]):
         show = "dead_campaigns"
