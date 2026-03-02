@@ -1930,6 +1930,15 @@ def handle_voice(message):
             data = analyze_crm_data(since, until)
             data.pop("_deal_details", None)
             safe_send(MY_CHAT_ID, generate_response(text, data, "branch_compare"))
+            elif show == "dashboard":
+            safe_send(MY_CHAT_ID, "📊 Генерирую дашборд...\n⏳")
+            data = full_analytics(since, until)
+            period_names = {"today": "Сегодня", "yesterday": "Вчера", "week": "Неделя", "month": "Месяц", "3months": "3 месяца", "6months": "Полгода", "year": "Год", "all": "Всё время"}
+            plabel = period_names.get(period, f"{since} — {until}")
+            png_path = generate_dashboard_png(data, plabel)
+            with open(png_path, 'rb') as photo:
+                bot.send_photo(MY_CHAT_ID, photo, caption=f"📊 iStudio Dashboard · {plabel}")
+            os.unlink(png_path)
         else:
             data = fetch_spend_data(period, since, until)
             safe_send(MY_CHAT_ID, generate_response(text, data, "spend"))
@@ -2029,6 +2038,15 @@ def handle_text(message):
             data = analyze_crm_data(since, until)
             data.pop("_deal_details", None)
             safe_send(MY_CHAT_ID, generate_response(user_text, data, "branch_compare"))
+            elif show == "dashboard":
+            safe_send(MY_CHAT_ID, "📊 Генерирую дашборд...\n⏳")
+            data = full_analytics(since, until)
+            period_names = {"today": "Сегодня", "yesterday": "Вчера", "week": "Неделя", "month": "Месяц", "3months": "3 месяца", "6months": "Полгода", "year": "Год", "all": "Всё время"}
+            plabel = period_names.get(period, f"{since} — {until}")
+            png_path = generate_dashboard_png(data, plabel)
+            with open(png_path, 'rb') as photo:
+                bot.send_photo(MY_CHAT_ID, photo, caption=f"📊 iStudio Dashboard · {plabel}")
+            os.unlink(png_path)
         else:
             data = fetch_spend_data(period, since, until)
             safe_send(MY_CHAT_ID, generate_response(user_text, data, "spend"))
