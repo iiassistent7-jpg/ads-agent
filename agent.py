@@ -1161,6 +1161,8 @@ def detect_intent(user_text):
         show = "best_source"
     elif any(w in text for w in ["филиал", "ришон", "хайфа", "сравни"]):
         show = "branch_compare"
+    elif any(w in text for w in ["дашборд", "dashboard", "картинк", "png", "изображен", "визуал"]):
+        show = "dashboard"
     elif any(w in text for w in ["crm", "срм", "амо", "amocrm", "сделки", "клиенты", "продаж"]):
         show = "crm"
     elif any(w in text for w in ["roi", "рои", "окупаемость", "эффективн", "лучш", "топ", "что работа", "что приносит"]):
