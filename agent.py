@@ -2115,6 +2115,8 @@ def handle_text(message):
             with open(png_path, 'rb') as photo:
                 bot.send_photo(MY_CHAT_ID, photo, caption=f"📊 iStudio Dashboard · {plabel}")
             os.unlink(png_path)
+            summary = generate_response(user_text, data, "full_report")
+            safe_send(MY_CHAT_ID, summary)
         else:
             data = fetch_spend_data(period, since, until)
             safe_send(MY_CHAT_ID, generate_response(user_text, data, "spend"))
