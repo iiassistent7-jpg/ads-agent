@@ -1427,16 +1427,24 @@ def generate_dashboard_png(data, period_label="Сегодня"):
         lost_rev = max(0, (total_deals - won_deals - lost_deals) * avg_deal)
         lost_n = max(0, total_deals - won_deals - lost_deals)
     else: lost_rev, lost_n = 0, 0
-    cac = round(total_spend / won_deals, 2) if won_deals > 0 and total_spend > 0 else 0
-    total_clicks = sum(c.get("clicks", 0) for c in data.get("campaigns", [])) if "campaigns" in data else 0
+    wf_won = wf.get("won", 0) if wf else 0
+    cac_ils = round((total_spend * 3.6) / wf_won, 0) if wf_won > 0 and total_spend > 0 else 0
+    pf_total = pf.get("total", 0) if pf else 0
+    pf_rev = pf.get("revenue", 0) if pf else 0
+    ltv_ils = round(pf_rev / pf_total, 0) if pf_total > 0 else 0
     cpc = round(total_spend / total_clicks, 2) if total_clicks > 0 else 0
     now = get_israel_now()
     date_str = now.strftime("%d.%m.%Y %H:%M")
     pi = data.get("period", {})
     if isinstance(pi, dict) and pi.get("since"):
         period_label = f'{pi["since"]} — {pi["until"]}'
-    roi_col = "green" if overall_roi > 0 else "red"
-    conv_col = "green" if conversion >= 20 else ("gold" if conversion >= 10 else "red")
+    wf_rev = wf.get("revenue", 0) if wf else 0
+    spend_ils = total_spend * 3.2
+    real_romi = round((wf_rev - spend_ils) / spend_ils * 100, 0) if spend_ils > 0 else 0
+    roi_col = "green" if real_romi > 0 else "red"
+    wf_total = wf.get("total", 0) if wf else 0
+    real_conv = round(wf_won / wf_total * 100, 1) if wf_total > 0 else 0
+    conv_col = "green" if real_conv >= 20 else ("gold" if real_conv >= 10 else "red")
 
     html = f'''<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 @import url('https://fonts.googleapis.com/css2?family=Unbounded:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
@@ -1518,10 +1526,10 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 <div class="lost"><div class="lost-l">Упущенная выручка</div><div class="lost-v">₪{lost_rev:,.0f}</div><div class="lost-s">{lost_n} сделок без результата</div></div></div>
 <div class="sec">Ключевые показатели</div>
 <div class="g4">
-<div class="pill"><div class="pill-l">CAC</div><div class="pill-v gold">{"$"+f"{cac:.0f}" if cac>0 else "—"}</div></div>
-<div class="pill"><div class="pill-l">CPC</div><div class="pill-v blue">{"$"+f"{cpc:.2f}" if cpc>0 else "—"}</div></div>
-<div class="pill"><div class="pill-l">ROMI</div><div class="pill-v {roi_col}">{overall_roi:.0f}%</div></div>
-<div class="pill"><div class="pill-l">Конверсия</div><div class="pill-v {conv_col}">{conversion}%</div></div></div>
+<div class="pill"><div class="pill-l">CAC</div><div class="pill-v gold">{"₪"+f"{cac_ils:.0f}" if cac_ils>0 else "—"}</div></div>
+<div class="pill"><div class="pill-l">LTV</div><div class="pill-v blue">{"₪"+f"{ltv_ils:.0f}" if ltv_ils>0 else "—"}</div></div>
+<div class="pill"><div class="pill-l">ROMI</div><div class="pill-v {roi_col}">{real_romi:.0f}%</div></div>
+<div class="pill"><div class="pill-l">Конверсия</div><div class="pill-v {conv_col}">{real_conv}%</div></div>
 <div class="footer">iStudio Performance Dashboard · Бот Рекламщик · {date_str}</div>
 </div></body></html>'''
 
