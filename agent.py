@@ -473,10 +473,10 @@ def analyze_crm_data(since=None, until=None):
         for s in p["stages"]:
             stage_map[s["id"]] = s["name"]
             name_lower = s["name"].lower()
-            if any(w in name_lower for w in ["успешно", "реализовано", "закрыто и реализовано", "оплач", "выполнен"]):
-                closed_won_ids.add(s["id"])
-            elif any(w in name_lower for w in ["закрыто и не реализовано", "отказ", "проиграна", "не реализовано"]):
+            if "не реализовано" in name_lower or "отказ" in name_lower or "проиграна" in name_lower:
                 closed_lost_ids.add(s["id"])
+            elif any(w in name_lower for w in ["успешно", "реализовано", "оплач", "выполнен"]):
+                closed_won_ids.add(s["id"])
 
     total_revenue = 0
     total_deals = 0
