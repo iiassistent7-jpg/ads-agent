@@ -1409,7 +1409,7 @@ def generate_dashboard_png(data, period_label="Сегодня"):
             html += f'{conn}<div class="fs"><div class="fv {cls}"{vis}>{pct or "—"}</div><div class="fw"><div class="fb" style="width:{w}%;background:linear-gradient(135deg,{c1},{c2})"><span class="ft">{val:,}</span><span class="fl">{label}</span></div></div></div>'
         rev = funnel_data.get("revenue", 0)
         conv = round(won/total*100, 1) if total > 0 else 0
-        html += f'<div style="display:flex;justify-content:center;gap:24px;margin-top:16px;font-size:13px">'
+        html += f'<div style="display:flex;justify-content:center;gap:24px;margin-top:16px;font-size:18px">'
         html += f'<span style="color:#22c55e">Конверсия: {conv}%</span>'
         html += f'<span style="color:#f0c040">Выручка: ₪{rev:,.0f}</span>'
         html += f'</div>'
@@ -1441,11 +1441,11 @@ def generate_dashboard_png(data, period_label="Сегодня"):
     html = f'''<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 @import url('https://fonts.googleapis.com/css2?family=Unbounded:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
 *{{margin:0;padding:0;box-sizing:border-box}}
-body{{background:#06060c;color:#e8e8f0;font-family:'JetBrains Mono',monospace;width:1080px;overflow:hidden}}
+body{{background:#06060c;color:#e8e8f0;font-family:'JetBrains Mono',monospace;width:1280px;overflow:hidden}}
 body::before{{content:'';position:fixed;top:-200px;left:-200px;width:600px;height:600px;background:radial-gradient(circle,rgba(240,192,64,.07)0%,transparent 65%);pointer-events:none}}
 body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;height:800px;background:radial-gradient(circle,rgba(59,130,246,.05)0%,transparent 60%);pointer-events:none}}
 .gr{{position:fixed;inset:0;background-image:linear-gradient(rgba(255,255,255,.015)1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.015)1px,transparent 1px);background-size:60px 60px;pointer-events:none}}
-.db{{position:relative;z-index:2;max-width:1040px;margin:0 auto;padding:32px 20px 24px}}
+.db{{position:relative;z-index:2;max-width:1240px;margin:0 auto;padding:32px 20px 24px}}
 .hd{{text-align:center;margin-bottom:36px;position:relative}}
 .hd::before{{content:'';position:absolute;top:-60px;left:50%;transform:translateX(-50%);width:400px;height:200px;background:radial-gradient(ellipse,rgba(240,192,64,.12)0%,transparent 70%);filter:blur(30px);pointer-events:none}}
 .lg{{font-family:'Unbounded',sans-serif;font-size:36px;font-weight:900;letter-spacing:-1.5px;background:linear-gradient(135deg,#f0c040,#ffd700,#f5d060,#b8922e);-webkit-background-clip:text;-webkit-text-fill-color:transparent}}
@@ -1456,37 +1456,37 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 .stx{{font-family:'Unbounded',sans-serif;font-size:12px;font-weight:700;color:{status_col};letter-spacing:2px}}
 .g4{{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px}}
 .g2{{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}}
-.card{{background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:18px;padding:22px;position:relative;overflow:hidden;backdrop-filter:blur(20px);box-shadow:0 4px 24px rgba(0,0,0,.4),0 1px 0 rgba(255,255,255,.04)inset,0 -2px 8px rgba(0,0,0,.2)inset;transform:perspective(800px)rotateX(1deg)}}
+.card{{background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:18px;padding:22px;position:relative;overflow:hidden;backdrop-filter:blur(20px);box-shadow:0 4px 24px rgba(0,0,0,.4),0 1px 0 rgba(255,255,255,.04)inset,0 -2px 8px rgba(0,0,0,.2)inset;transform:perspective(800px)rotateX(3deg)}}
 .card::before{{content:'';position:absolute;top:0;left:0;right:0;height:50%;background:linear-gradient(180deg,rgba(255,255,255,.04),transparent);border-radius:18px 18px 0 0;pointer-events:none}}
-.cl{{font-size:9px;color:#6b6b80;text-transform:uppercase;letter-spacing:2.5px;margin-bottom:10px}}
-.cv{{font-family:'Unbounded',sans-serif;font-size:34px;font-weight:700;line-height:1;text-shadow:0 2px 8px rgba(0,0,0,.3)}}
-.sec{{font-family:'Unbounded',sans-serif;font-size:10px;font-weight:600;color:#6b6b80;letter-spacing:4px;text-transform:uppercase;margin:32px 0 16px;display:flex;align-items:center;gap:12px}}
+.cl{{font-size:14px;color:#6b6b80;text-transform:uppercase;letter-spacing:2.5px;margin-bottom:10px}}
+.cv{{font-family:'Unbounded',sans-serif;font-size:42px;font-weight:700;line-height:1;text-shadow:0 2px 8px rgba(0,0,0,.3)}}
+.sec{{font-family:'Unbounded',sans-serif;font-size:18px;font-weight:600;color:#6b6b80;letter-spacing:4px;text-transform:uppercase;margin:32px 0 16px;display:flex;align-items:center;gap:12px}}
 .sec::after{{content:'';flex:1;height:1px;background:linear-gradient(90deg,rgba(255,255,255,.06),transparent)}}
 .fcard{{background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:18px;padding:28px 24px;margin-bottom:14px;backdrop-filter:blur(20px);box-shadow:0 8px 32px rgba(0,0,0,.5),0 1px 0 rgba(255,255,255,.04)inset;overflow:hidden}}
 .fn{{display:flex;flex-direction:column;align-items:center;gap:2px;max-width:620px;margin:0 auto}}
 .fs{{display:flex;align-items:center;width:100%}}
 .fw{{flex:1;display:flex;justify-content:center}}
-.fb{{height:46px;border-radius:10px;display:flex;align-items:center;justify-content:center;position:relative;box-shadow:0 4px 16px rgba(0,0,0,.4),0 2px 0 rgba(255,255,255,.15)inset;transform:perspective(500px)rotateX(2deg)}}
+.fb{{height:46px;border-radius:10px;display:flex;align-items:center;justify-content:center;position:relative;box-shadow:0 4px 16px rgba(0,0,0,.4),0 2px 0 rgba(255,255,255,.15)inset;transform:perspective(500px)rotateX(5deg)}}
 .fb::after{{content:'';position:absolute;top:0;left:0;right:0;height:50%;background:linear-gradient(180deg,rgba(255,255,255,.18),transparent);border-radius:10px 10px 0 0;pointer-events:none}}
-.ft{{font-family:'Unbounded',sans-serif;font-size:20px;font-weight:700;color:#fff;text-shadow:0 2px 4px rgba(0,0,0,.4);position:relative;z-index:1}}
-.fl{{position:absolute;right:-140px;font-size:13px;color:#6b6b80;text-transform:uppercase;letter-spacing:1px;white-space:nowrap;width:130px;z-index:1}}
-.fv{{position:absolute;left:-60px;font-size:11px;font-weight:600;white-space:nowrap;width:50px;text-align:right}}
+.ft{{font-family:'Unbounded',sans-serif;font-size:26px;font-weight:700;color:#fff;text-shadow:0 2px 4px rgba(0,0,0,.4);position:relative;z-index:1}}
+.fl{{position:absolute;right:-180px;font-size:18px;color:#6b6b80;text-transform:uppercase;letter-spacing:1px;white-space:nowrap;width:130px;z-index:1}}
+.fv{{position:absolute;left:-80px;font-size:16px;font-weight:600;white-space:nowrap;width:50px;text-align:right}}
 .fv.good{{color:#22c55e}}.fv.warn{{color:#f97316}}.fv.bad{{color:#ef4444}}
 .fc{{width:2px;height:6px;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.02));margin:0 auto}}
 .cr{{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.04)}}.cr:last-child{{border-bottom:none}}
-.c0{{font-size:10px;color:#6b6b80;width:24px;font-weight:600}}.c1{{font-size:12px;flex:1;padding-right:12px}}.c2{{font-size:12px;color:#6b6b80;width:70px;text-align:right}}.c3{{font-size:12px;width:50px;text-align:right}}.c4{{font-size:12px;font-weight:600;width:80px;text-align:right}}
+.c0{{font-size:10px;color:#6b6b80;width:24px;font-weight:600}}.c1{{font-size:15px;flex:1;padding-right:12px}}.c2{{font-size:15px;color:#6b6b80;width:70px;text-align:right}}.c3{{font-size:15px;width:50px;text-align:right}}.c4{{font-size:15px;font-weight:600;width:80px;text-align:right}}
 .c4.good{{color:#22c55e}}.c4.avg{{color:#f97316}}.c4.bad{{color:#ef4444}}
 .profit{{background:linear-gradient(135deg,rgba(34,197,94,.1),rgba(240,192,64,.06));border:1px solid rgba(34,197,94,.2);border-radius:18px;padding:24px;text-align:center;box-shadow:0 4px 24px rgba(34,197,94,.1)}}
 .profit-l{{font-size:9px;color:#22c55e;text-transform:uppercase;letter-spacing:4px;margin-bottom:8px}}
-.profit-v{{font-family:'Unbounded',sans-serif;font-size:38px;font-weight:800;color:#22c55e;text-shadow:0 0 40px rgba(34,197,94,.3)}}
+.profit-v{{font-family:'Unbounded',sans-serif;font-size:48px;font-weight:800;color:#22c55e;text-shadow:0 0 40px rgba(34,197,94,.3)}}
 .profit-v em{{font-size:22px;font-weight:500;opacity:.7;font-style:normal}}
 .lost{{background:linear-gradient(135deg,rgba(239,68,68,.08),rgba(239,68,68,.02));border:1px solid rgba(239,68,68,.15);border-radius:18px;padding:24px;text-align:center}}
 .lost-l{{font-size:9px;color:#ef4444;text-transform:uppercase;letter-spacing:4px;margin-bottom:8px}}
-.lost-v{{font-family:'Unbounded',sans-serif;font-size:28px;font-weight:700;color:#ef4444}}
+.lost-v{{font-family:'Unbounded',sans-serif;font-size:40px;font-weight:700;color:#ef4444}}
 .lost-s{{font-size:11px;color:#6b6b80;margin-top:8px}}
 .pill{{flex:1;background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:16px;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.3)}}
-.pill-l{{font-size:8px;color:#6b6b80;text-transform:uppercase;letter-spacing:2.5px;margin-bottom:8px}}
-.pill-v{{font-family:'Unbounded',sans-serif;font-size:22px;font-weight:700}}
+.pill-l{{font-size:14px;color:#6b6b80;text-transform:uppercase;letter-spacing:2.5px;margin-bottom:8px}}
+.pill-v{{font-family:'Unbounded',sans-serif;font-size:32px;font-weight:700}}
 .pill-v.gold{{color:#f0c040}}.pill-v.green{{color:#22c55e}}.pill-v.red{{color:#ef4444}}.pill-v.blue{{color:#3b82f6}}
 .footer{{text-align:center;padding:24px 0 8px;font-size:9px;color:#3a3a50;letter-spacing:2px;text-transform:uppercase}}
 </style></head><body><div class="gr"></div><div class="db">
@@ -1533,11 +1533,11 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'])
-            page = browser.new_page(viewport={"width": 1080, "height": 800}, device_scale_factor=2)
+            page = browser.new_page(viewport={"width": 1280, "height": 800}, device_scale_factor=2)
             page.goto(f"file://{html_path}", wait_until="networkidle")
             page.wait_for_timeout(1500)
             height = page.evaluate("document.documentElement.scrollHeight")
-            page.set_viewport_size({"width": 1080, "height": height})
+            page.set_viewport_size({"width": 1280, "height": height})
             page.wait_for_timeout(300)
             page.screenshot(path=png_path, full_page=True, type="png")
             browser.close()
