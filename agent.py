@@ -1409,7 +1409,7 @@ def generate_dashboard_png(data, period_label="Сегодня"):
             html += f'{conn}<div class="fs"><div class="fv {cls}"{vis}>{pct or "—"}</div><div class="fw"><div class="fb" style="width:{w}%;background:linear-gradient(135deg,{c1},{c2})"><span class="ft">{val:,}</span><span class="fl">{label}</span></div></div></div>'
         rev = funnel_data.get("revenue", 0)
         conv = round(won/total*100, 1) if total > 0 else 0
-        html += f'<div style="display:flex;justify-content:center;gap:24px;margin-top:16px;font-size:18px">'
+        html += f'<div style="display:flex;justify-content:center;gap:32px;margin-top:20px;font-size:22px;font-weight:700">'
         html += f'<span style="color:#22c55e">Конверсия: {conv}%</span>'
         html += f'<span style="color:#f0c040">Выручка: ₪{rev:,.0f}</span>'
         html += f'</div>'
@@ -1458,39 +1458,39 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 .g2{{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}}
 .card{{background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:18px;padding:22px;position:relative;overflow:hidden;backdrop-filter:blur(20px);box-shadow:0 4px 24px rgba(0,0,0,.4),0 1px 0 rgba(255,255,255,.04)inset,0 -2px 8px rgba(0,0,0,.2)inset;transform:perspective(800px)rotateX(3deg)}}
 .card::before{{content:'';position:absolute;top:0;left:0;right:0;height:50%;background:linear-gradient(180deg,rgba(255,255,255,.04),transparent);border-radius:18px 18px 0 0;pointer-events:none}}
-.cl{{font-size:14px;color:#6b6b80;text-transform:uppercase;letter-spacing:2.5px;margin-bottom:10px}}
-.cv{{font-family:'Unbounded',sans-serif;font-size:42px;font-weight:700;line-height:1;text-shadow:0 2px 8px rgba(0,0,0,.3)}}
-.sec{{font-family:'Unbounded',sans-serif;font-size:18px;font-weight:600;color:#6b6b80;letter-spacing:4px;text-transform:uppercase;margin:32px 0 16px;display:flex;align-items:center;gap:12px}}
-.sec::after{{content:'';flex:1;height:1px;background:linear-gradient(90deg,rgba(255,255,255,.06),transparent)}}
+.cl{{font-size:16px;color:#a0a0b8;text-transform:uppercase;letter-spacing:2.5px;margin-bottom:10px}}
+.cv{{font-family:'Unbounded',sans-serif;font-size:46px;font-weight:800;line-height:1;text-shadow:0 2px 8px rgba(0,0,0,.3)}}
+.sec{{font-family:'Unbounded',sans-serif;font-size:20px;font-weight:700;color:#e8e8f0;letter-spacing:4px;text-transform:uppercase;margin:32px 0 16px;display:flex;align-items:center;justify-content:center;gap:12px}}
+.sec::after{{content:none}}
 .fcard{{background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:18px;padding:28px 24px;margin-bottom:14px;backdrop-filter:blur(20px);box-shadow:0 8px 32px rgba(0,0,0,.5),0 1px 0 rgba(255,255,255,.04)inset;overflow:hidden}}
 .fn{{display:flex;flex-direction:column;align-items:center;gap:2px;max-width:620px;margin:0 auto}}
 .fs{{display:flex;align-items:center;width:100%}}
 .fw{{flex:1;display:flex;justify-content:center}}
-.fb{{height:46px;border-radius:10px;display:flex;align-items:center;justify-content:center;position:relative;box-shadow:0 4px 16px rgba(0,0,0,.4),0 2px 0 rgba(255,255,255,.15)inset;transform:perspective(500px)rotateX(5deg)}}
+.fb{{height:56px;border-radius:10px;display:flex;align-items:center;justify-content:center;position:relative;box-shadow:0 4px 16px rgba(0,0,0,.4),0 2px 0 rgba(255,255,255,.15)inset;transform:perspective(500px)rotateX(5deg)}}
 .fb::after{{content:'';position:absolute;top:0;left:0;right:0;height:50%;background:linear-gradient(180deg,rgba(255,255,255,.18),transparent);border-radius:10px 10px 0 0;pointer-events:none}}
-.ft{{font-family:'Unbounded',sans-serif;font-size:26px;font-weight:700;color:#fff;text-shadow:0 2px 4px rgba(0,0,0,.4);position:relative;z-index:1}}
-.fl{{position:absolute;right:-180px;font-size:18px;color:#6b6b80;text-transform:uppercase;letter-spacing:1px;white-space:nowrap;width:130px;z-index:1}}
-.fv{{position:absolute;left:-80px;font-size:16px;font-weight:600;white-space:nowrap;width:50px;text-align:right}}
+.ft{{font-family:'Unbounded',sans-serif;font-size:30px;font-weight:800;font-weight:700;color:#fff;text-shadow:0 2px 4px rgba(0,0,0,.4);position:relative;z-index:1}}
+.fl{{position:absolute;right:-200px;font-size:20px;color:#e0e0f0;font-weight:700;text-transform:uppercase;letter-spacing:1px;white-space:nowrap;width:130px;z-index:1}}
+.fv{{position:absolute;left:-90px;font-size:20px;font-weight:600;white-space:nowrap;width:50px;text-align:right}}
 .fv.good{{color:#22c55e}}.fv.warn{{color:#f97316}}.fv.bad{{color:#ef4444}}
 .fc{{width:2px;height:6px;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.02));margin:0 auto}}
 .cr{{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.04)}}.cr:last-child{{border-bottom:none}}
-.c0{{font-size:10px;color:#6b6b80;width:24px;font-weight:600}}.c1{{font-size:15px;flex:1;padding-right:12px}}.c2{{font-size:15px;color:#6b6b80;width:70px;text-align:right}}.c3{{font-size:15px;width:50px;text-align:right}}.c4{{font-size:15px;font-weight:600;width:80px;text-align:right}}
+.c0{{font-size:10px;color:#6b6b80;width:24px;font-weight:600}}.c1{{font-size:16px;font-weight:500;flex:1;padding-right:12px}}.c2{{font-size:15px;color:#6b6b80;width:70px;text-align:right}}.c3{{font-size:15px;width:50px;text-align:right}}.c4{{font-size:15px;font-weight:600;width:80px;text-align:right}}
 .c4.good{{color:#22c55e}}.c4.avg{{color:#f97316}}.c4.bad{{color:#ef4444}}
 .profit{{background:linear-gradient(135deg,rgba(34,197,94,.1),rgba(240,192,64,.06));border:1px solid rgba(34,197,94,.2);border-radius:18px;padding:24px;text-align:center;box-shadow:0 4px 24px rgba(34,197,94,.1)}}
-.profit-l{{font-size:9px;color:#22c55e;text-transform:uppercase;letter-spacing:4px;margin-bottom:8px}}
+.profit-l{{font-size:14px;color:#22c55e;text-transform:uppercase;letter-spacing:4px;margin-bottom:8px}}
 .profit-v{{font-family:'Unbounded',sans-serif;font-size:48px;font-weight:800;color:#22c55e;text-shadow:0 0 40px rgba(34,197,94,.3)}}
 .profit-v em{{font-size:22px;font-weight:500;opacity:.7;font-style:normal}}
 .lost{{background:linear-gradient(135deg,rgba(239,68,68,.08),rgba(239,68,68,.02));border:1px solid rgba(239,68,68,.15);border-radius:18px;padding:24px;text-align:center}}
-.lost-l{{font-size:9px;color:#ef4444;text-transform:uppercase;letter-spacing:4px;margin-bottom:8px}}
+.lost-l{{font-size:14px;color:#ef4444;text-transform:uppercase;letter-spacing:4px;margin-bottom:8px}}
 .lost-v{{font-family:'Unbounded',sans-serif;font-size:40px;font-weight:700;color:#ef4444}}
-.lost-s{{font-size:11px;color:#6b6b80;margin-top:8px}}
+.lost-s{{font-size:15px;color:#6b6b80;margin-top:8px}}
 .pill{{flex:1;background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:16px;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.3)}}
-.pill-l{{font-size:14px;color:#6b6b80;text-transform:uppercase;letter-spacing:2.5px;margin-bottom:8px}}
-.pill-v{{font-family:'Unbounded',sans-serif;font-size:32px;font-weight:700}}
+.pill-l{{font-size:16px;color:#a0a0b8;color:#6b6b80;text-transform:uppercase;letter-spacing:2.5px;margin-bottom:8px}}
+.pill-v{{font-family:'Unbounded',sans-serif;font-size:36px;font-weight:800;font-weight:700}}
 .pill-v.gold{{color:#f0c040}}.pill-v.green{{color:#22c55e}}.pill-v.red{{color:#ef4444}}.pill-v.blue{{color:#3b82f6}}
 .footer{{text-align:center;padding:24px 0 8px;font-size:9px;color:#3a3a50;letter-spacing:2px;text-transform:uppercase}}
 </style></head><body><div class="gr"></div><div class="db">
-<div class="hd"><div class="lg">iStudio</div><div class="hs">Performance Dashboard</div><div class="badge">{period_label}</div>
+<div class="hd"><div class="lg">iStudio</div><div class="hs"></div><div class="badge">{period_label}</div>
 <div class="sb"><div class="sd"></div><div class="stx">{status_txt}</div></div></div>
 <div class="sec">Meta Ads</div>
 <div class="g4">
