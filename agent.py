@@ -1432,7 +1432,6 @@ def generate_dashboard_png(data, period_label="Сегодня"):
     pf_total = pf.get("total", 0) if pf else 0
     pf_rev = pf.get("revenue", 0) if pf else 0
     ltv_ils = round(pf_rev / pf_total, 0) if pf_total > 0 else 0
-    cpc = round(total_spend / total_clicks, 2) if total_clicks > 0 else 0
     now = get_israel_now()
     date_str = now.strftime("%d.%m.%Y %H:%M")
     pi = data.get("period", {})
