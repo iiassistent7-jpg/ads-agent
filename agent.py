@@ -1385,8 +1385,8 @@ def generate_dashboard_png(data, period_label="Сегодня"):
         stages_list = [
             ("Всего заявок", total, 100),
             ("В работе", in_progress, max(15, in_progress/max(total,1)*100)),
-            ("Выполнено", won, max(10, won/max(total,1)*100)),
-            ("Отказ", lost, max(8, lost/max(total,1)*100)),
+            ("Отказ", lost, max(10, lost/max(total,1)*100)),
+            ("Выполнено", won, max(8, won/max(total,1)*100)),
         ]
         html = ""
         for i, (label, val, w) in enumerate(stages_list):
@@ -1409,7 +1409,7 @@ def generate_dashboard_png(data, period_label="Сегодня"):
             html += f'{conn}<div class="fs"><div class="fv {cls}"{vis}>{pct or "—"}</div><div class="fw"><div class="fb" style="width:{w}%;background:linear-gradient(135deg,{c1},{c2})"><span class="ft">{val:,}</span><span class="fl">{label}</span></div></div></div>'
         rev = funnel_data.get("revenue", 0)
         conv = round(won/total*100, 1) if total > 0 else 0
-        html += f'<div style="display:flex;justify-content:center;gap:32px;margin-top:20px;font-size:28px;font-weight:800">'
+        html += f'<div style="display:flex;justify-content:center;gap:32px;margin-top:20px;font-size:32px;font-weight:900">'
         html += f'<span style="color:#22c55e">Конверсия: {conv}%</span>'
         html += f'<span style="color:#f0c040">Выручка: ₪{rev:,.0f}</span>'
         html += f'</div>'
@@ -1457,10 +1457,10 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 .hd::before{{content:'';position:absolute;top:-60px;left:50%;transform:translateX(-50%);width:400px;height:200px;background:radial-gradient(ellipse,rgba(240,192,64,.12)0%,transparent 70%);filter:blur(30px);pointer-events:none}}
 .lg{{font-family:'Unbounded',sans-serif;font-size:36px;font-weight:900;letter-spacing:-1.5px;background:linear-gradient(135deg,#f0c040,#ffd700,#f5d060,#b8922e);-webkit-background-clip:text;-webkit-text-fill-color:transparent}}
 .hs{{font-size:10px;color:#6b6b80;letter-spacing:5px;text-transform:uppercase;margin:4px 0 14px}}
-.badge{{display:inline-block;padding:10px 24px;border:1px solid rgba(255,255,255,.06);border-radius:24px;font-size:16px;font-weight:600;color:#6b6b80;background:rgba(18,18,28,.85)}}
+.badge{{display:inline-block;padding:12px 28px;border:1px solid rgba(255,255,255,.06);border-radius:24px;font-size:20px;font-weight:700;color:#6b6b80;background:rgba(18,18,28,.85)}}
 .sb{{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:18px}}
 .sd{{width:9px;height:9px;border-radius:50%;background:{status_col};box-shadow:0 0 12px {status_col}80,0 0 30px {status_col}40}}
-.stx{{font-family:'Unbounded',sans-serif;font-size:18px;font-weight:800;color:{status_col};letter-spacing:2px}}
+.stx{{font-family:'Unbounded',sans-serif;font-size:22px;font-weight:900;color:{status_col};letter-spacing:2px}}
 .g4{{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px}}
 .g2{{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}}
 .card{{background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:18px;padding:22px;position:relative;overflow:hidden;backdrop-filter:blur(20px);box-shadow:0 4px 24px rgba(0,0,0,.4),0 1px 0 rgba(255,255,255,.04)inset,0 -2px 8px rgba(0,0,0,.2)inset;transform:perspective(800px)rotateX(3deg)}}
@@ -1481,19 +1481,19 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 .fv.good{{color:#22c55e}}.fv.warn{{color:#f97316}}.fv.bad{{color:#ef4444}}
 .fc{{width:2px;height:6px;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.02));margin:0 auto}}
 .cr{{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.04)}}.cr:last-child{{border-bottom:none}}
-.c0{{font-size:10px;color:#6b6b80;width:24px;font-weight:600}}.c1{{font-size:16px;font-weight:500;flex:1;padding-right:12px}}.c2{{font-size:15px;color:#6b6b80;width:70px;text-align:right}}.c3{{font-size:15px;width:50px;text-align:right}}.c4{{font-size:15px;font-weight:600;width:80px;text-align:right}}
+.c0{{font-size:10px;color:#6b6b80;width:24px;font-weight:600}}.c1{{font-size:18px;font-weight:600;flex:1;padding-right:12px}}.c2{{font-size:18px;font-weight:600;color:#6b6b80;width:70px;text-align:right}}.c3{{font-size:18px;font-weight:600;width:50px;text-align:right}}.c4{{font-size:18px;font-weight:600;width:80px;text-align:right}}
 .c4.good{{color:#22c55e}}.c4.avg{{color:#f97316}}.c4.bad{{color:#ef4444}}
 .profit{{background:linear-gradient(135deg,rgba(34,197,94,.1),rgba(240,192,64,.06));border:1px solid rgba(34,197,94,.2);border-radius:18px;padding:24px;text-align:center;box-shadow:0 4px 24px rgba(34,197,94,.1)}}
-.profit-l{{font-size:20px;color:#22c55e;font-weight:700;text-transform:uppercase;letter-spacing:4px;margin-bottom:8px}}
-.profit-v{{font-family:'Unbounded',sans-serif;font-size:48px;font-weight:800;color:#22c55e;text-shadow:0 0 40px rgba(34,197,94,.3)}}
+.profit-l{{font-size:24px;color:#22c55e;font-weight:800;text-transform:uppercase;letter-spacing:4px;margin-bottom:8px}}
+.profit-v{{font-family:'Unbounded',sans-serif;font-size:54px;font-weight:800;color:#22c55e;text-shadow:0 0 40px rgba(34,197,94,.3)}}
 .profit-v em{{font-size:22px;font-weight:500;opacity:.7;font-style:normal}}
 .lost{{background:linear-gradient(135deg,rgba(239,68,68,.08),rgba(239,68,68,.02));border:1px solid rgba(239,68,68,.15);border-radius:18px;padding:24px;text-align:center}}
-.lost-l{{font-size:20px;color:#ef4444;font-weight:700;text-transform:uppercase;letter-spacing:4px;margin-bottom:8px}}
-.lost-v{{font-family:'Unbounded',sans-serif;font-size:40px;font-weight:700;color:#ef4444}}
+.lost-l{{font-size:24px;color:#ef4444;font-weight:800;text-transform:uppercase;letter-spacing:4px;margin-bottom:8px}}
+.lost-v{{font-family:'Unbounded',sans-serif;font-size:48px;font-weight:700;color:#ef4444}}
 .lost-s{{font-size:18px;font-weight:600;color:#6b6b80;margin-top:8px}}
 .pill{{flex:1;background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:16px;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.3)}}
-.pill-l{{font-size:20px;color:#e0e0f0;font-weight:700;color:#6b6b80;text-transform:uppercase;letter-spacing:2.5px;margin-bottom:8px}}
-.pill-v{{font-family:'Unbounded',sans-serif;font-size:44px;font-weight:900;font-weight:700}}
+.pill-l{{font-size:22px;color:#e0e0f0;font-weight:800;color:#6b6b80;text-transform:uppercase;letter-spacing:2.5px;margin-bottom:8px}}
+.pill-v{{font-family:'Unbounded',sans-serif;font-size:50px;font-weight:900;font-weight:700}}
 .pill-v.gold{{color:#f0c040}}.pill-v.green{{color:#22c55e}}.pill-v.red{{color:#ef4444}}.pill-v.blue{{color:#3b82f6}}
 .footer{{text-align:center;padding:24px 0 8px;font-size:9px;color:#3a3a50;letter-spacing:2px;text-transform:uppercase}}
 </style></head><body><div class="gr"></div><div class="db">
@@ -1521,7 +1521,7 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 <span class="c0">#</span><span class="c1">Кампания</span><span class="c2">Расход</span><span class="c3">Лиды</span><span class="c4">CPL</span></div>
 {camps_html}</div>
 <div class="g2" style="margin-top:14px">
-<div class="profit"><div class="profit-l">{"Прибыль" if profit_ok else "Выручка"}</div><div class="profit-v"><em>₪</em>{abs(total_revenue):,.0f}</div></div>
+<div class="profit"><div class="profit-l">{"Прибыль" if profit_ok else "Выручка"}</div><div class="profit-v"><em>₪</em>{abs(total_revenue - total_spend * 3.2):,.0f}</div></div>
 <div class="lost"><div class="lost-l">Упущенная выручка</div><div class="lost-v">₪{lost_rev:,.0f}</div><div class="lost-s">{lost_n} сделок без результата</div></div></div>
 <div class="sec">Ключевые показатели</div>
 <div class="g4">
