@@ -1678,9 +1678,9 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 .hd{{text-align:center;margin-bottom:36px;position:relative}}
 .hd::before{{content:'';position:absolute;top:-60px;left:50%;transform:translateX(-50%);width:400px;height:200px;background:radial-gradient(ellipse,rgba(240,192,64,.12)0%,transparent 70%);filter:blur(30px);pointer-events:none}}
 .lg{{font-family:'Unbounded',sans-serif;font-size:36px;font-weight:900;letter-spacing:-1.5px;background:linear-gradient(135deg,#f0c040,#ffd700,#f5d060,#b8922e);-webkit-background-clip:text;-webkit-text-fill-color:transparent}}
-.hs{{font-size:10px;color:#6b6b80;letter-spacing:5px;text-transform:uppercase;margin:4px 0 14px}}
-.badge{{display:inline-block;padding:12px 28px;border:1px solid rgba(255,255,255,.06);border-radius:24px;font-size:20px;font-weight:700;color:#6b6b80;background:rgba(18,18,28,.85)}}
-.vs-label{{font-size:11px;color:#4a4a5a;letter-spacing:3px;text-transform:uppercase;margin-top:8px}}
+.hs{{font-size:10px;color:#6b6b80;letter-spacing:5px;text-transform:uppercase;margin:4px 0 8px}}
+.badge{{display:inline-block;font-family:'Unbounded',sans-serif;font-size:32px;font-weight:800;letter-spacing:-1px;background:linear-gradient(135deg,#e0e0f0,#a0a0c0);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:4px}}
+.vs-label{{font-size:11px;color:#4a4a5a;letter-spacing:3px;text-transform:uppercase;margin-top:4px}}
 .sb{{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:18px}}
 .sd{{width:9px;height:9px;border-radius:50%;background:{status_col};box-shadow:0 0 12px {status_col}80,0 0 30px {status_col}40}}
 .stx{{font-family:'Unbounded',sans-serif;font-size:22px;font-weight:900;color:{status_col};letter-spacing:2px}}
@@ -1689,10 +1689,11 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 .card{{background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:18px;padding:22px;position:relative;overflow:hidden;backdrop-filter:blur(20px);box-shadow:0 4px 24px rgba(0,0,0,.4),0 1px 0 rgba(255,255,255,.04)inset,0 -2px 8px rgba(0,0,0,.2)inset;transform:perspective(800px)rotateX(3deg)}}
 .card::before{{content:'';position:absolute;top:0;left:0;right:0;height:50%;background:linear-gradient(180deg,rgba(255,255,255,.04),transparent);border-radius:18px 18px 0 0;pointer-events:none}}
 .cl{{font-size:20px;color:#e0e0f0;font-weight:700;text-transform:uppercase;letter-spacing:2.5px;margin-bottom:10px}}
+.cv-row{{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}}
 .cv{{font-family:'Unbounded',sans-serif;font-size:46px;font-weight:800;line-height:1;text-shadow:0 2px 8px rgba(0,0,0,.3)}}
-/* Delta badges */
-.db-delta{{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;padding:3px 10px;border-radius:20px;background:rgba(255,255,255,.06);margin-top:8px;letter-spacing:0.5px}}
-.db-flat{{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:600;padding:3px 10px;border-radius:20px;background:rgba(255,255,255,.04);color:#4a4a5a;margin-top:8px}}
+/* Delta badges — inline right of value */
+.db-delta{{display:inline-flex;align-items:center;font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;padding:3px 9px;border-radius:16px;background:rgba(255,255,255,.07);letter-spacing:0.3px;white-space:nowrap}}
+.db-flat{{display:inline-flex;align-items:center;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;padding:3px 9px;border-radius:16px;background:rgba(255,255,255,.04);color:#4a4a5a;white-space:nowrap}}
 .sec{{font-family:'Unbounded',sans-serif;font-size:20px;font-weight:700;color:#e8e8f0;letter-spacing:4px;text-transform:uppercase;margin:32px 0 16px;display:flex;align-items:center;justify-content:center;gap:12px}}
 .fcard{{background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:18px;padding:28px 24px;margin-bottom:14px;backdrop-filter:blur(20px);box-shadow:0 8px 32px rgba(0,0,0,.5),0 1px 0 rgba(255,255,255,.04)inset;overflow:hidden}}
 .fstats{{display:flex;gap:24px;justify-content:center;margin-bottom:16px;flex-wrap:wrap}}
@@ -1738,23 +1739,19 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 <div class="g4">
   <div class="card">
     <div class="cl">Расход</div>
-    <div class="cv">${total_spend:,.0f}</div>
-    {delta_spend}
+    <div class="cv-row"><div class="cv">${total_spend:,.0f}</div>{delta_spend}</div>
   </div>
   <div class="card">
     <div class="cl">Лиды</div>
-    <div class="cv">{total_leads}</div>
-    {delta_leads}
+    <div class="cv-row"><div class="cv">{total_leads}</div>{delta_leads}</div>
   </div>
   <div class="card">
     <div class="cl">CPL</div>
-    <div class="cv">${avg_cpl:.2f}</div>
-    {delta_cpl}
+    <div class="cv-row"><div class="cv">${avg_cpl:.2f}</div>{delta_cpl}</div>
   </div>
   <div class="card">
     <div class="cl">Конверсия</div>
-    <div class="cv">{conversion}%</div>
-    {delta_conv_meta}
+    <div class="cv-row"><div class="cv">{conversion}%</div>{delta_conv_meta}</div>
   </div>
 </div>
 
@@ -1781,23 +1778,19 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 <div class="g4">
   <div class="card">
     <div class="cl">Сделок</div>
-    <div class="cv">{total_deals}</div>
-    {delta_deals}
+    <div class="cv-row"><div class="cv">{total_deals}</div>{delta_deals}</div>
   </div>
   <div class="card">
     <div class="cl">Продаж</div>
-    <div class="cv" style="color:#22c55e">{won_deals}</div>
-    {delta_won}
+    <div class="cv-row"><div class="cv" style="color:#22c55e">{won_deals}</div>{delta_won}</div>
   </div>
   <div class="card">
     <div class="cl">Выручка</div>
-    <div class="cv" style="color:#22c55e">₪{total_revenue:,.0f}</div>
-    {delta_revenue}
+    <div class="cv-row"><div class="cv" style="color:#22c55e">₪{total_revenue:,.0f}</div>{delta_revenue}</div>
   </div>
   <div class="card">
     <div class="cl">Ср. чек</div>
-    <div class="cv">₪{avg_deal:,.0f}</div>
-    {delta_avg_deal}
+    <div class="cv-row"><div class="cv">₪{avg_deal:,.0f}</div>{delta_avg_deal}</div>
   </div>
 </div>
 
@@ -1825,23 +1818,27 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 <div class="g4">
   <div class="pill">
     <div class="pill-l">CAC</div>
-    <div class="pill-v gold">{"₪"+f"{cac_ils:.0f}" if cac_ils>0 else "—"}</div>
-    {delta_cac}
+    <div class="cv-row" style="justify-content:center">
+      <div class="pill-v gold">{"₪"+f"{cac_ils:.0f}" if cac_ils>0 else "—"}</div>{delta_cac}
+    </div>
   </div>
   <div class="pill">
     <div class="pill-l">LTV</div>
-    <div class="pill-v blue">{"₪"+f"{ltv_ils:.0f}" if ltv_ils>0 else "—"}</div>
-    {delta_ltv}
+    <div class="cv-row" style="justify-content:center">
+      <div class="pill-v blue">{"₪"+f"{ltv_ils:.0f}" if ltv_ils>0 else "—"}</div>{delta_ltv}
+    </div>
   </div>
   <div class="pill">
     <div class="pill-l">ROMI</div>
-    <div class="pill-v {roi_col}">{real_romi:.0f}%</div>
-    {delta_romi}
+    <div class="cv-row" style="justify-content:center">
+      <div class="pill-v {roi_col}">{real_romi:.0f}%</div>{delta_romi}
+    </div>
   </div>
   <div class="pill">
     <div class="pill-l">Конверсия</div>
-    <div class="pill-v {conv_col}">{real_conv}%</div>
-    {delta_real_conv}
+    <div class="cv-row" style="justify-content:center">
+      <div class="pill-v {conv_col}">{real_conv}%</div>{delta_real_conv}
+    </div>
   </div>
 </div>
 
