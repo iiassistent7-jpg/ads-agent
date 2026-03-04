@@ -62,7 +62,8 @@ def call_claude(system_prompt, user_content, max_tokens=3000, retries=3):
 # HELPERS
 # ============================================================
 def get_israel_now():
-    return datetime.utcnow() + timedelta(hours=ISRAEL_UTC_OFFSET)
+    from datetime import timezone
+    return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=ISRAEL_UTC_OFFSET)
 
 def get_date_range(period):
     now = get_israel_now()
@@ -1096,6 +1097,7 @@ def fetch_comparison_data(since, until):
         "wf_won": prev_wf_won,
         "wf_revenue": prev_wf_rev,
         "pf_total": prev_pf_total,
+        "pf_won": pf.get("won", 0) if pf else 0,
         "pf_revenue": prev_pf_rev,
     }
 
@@ -1665,6 +1667,7 @@ def generate_dashboard_png(data, period_label="Сегодня", prev_data=None):
     delta_wf_won    = d_badge(wf_won,    prev_wf_won)
     delta_wf_rev    = d_badge(wf_rev,    prev_wf_rev)
     delta_pf_total  = d_badge(pf_total,  prev_pf_total)
+    delta_pf_won    = d_badge(pf.get("won", 0) if pf else 0, p.get("pf_won", 0))
     delta_pf_rev    = d_badge(pf_rev,    prev_pf_rev)
 
     html = f'''<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
@@ -1697,9 +1700,9 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 .sec{{font-family:'Unbounded',sans-serif;font-size:20px;font-weight:700;color:#e8e8f0;letter-spacing:4px;text-transform:uppercase;margin:32px 0 16px;display:flex;align-items:center;justify-content:center;gap:12px}}
 .fcard{{background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:18px;padding:28px 24px;margin-bottom:14px;backdrop-filter:blur(20px);box-shadow:0 8px 32px rgba(0,0,0,.5),0 1px 0 rgba(255,255,255,.04)inset;overflow:hidden}}
 .fstats{{display:flex;gap:24px;justify-content:center;margin-bottom:16px;flex-wrap:wrap}}
-.fstat{{text-align:center;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);border-radius:12px;padding:12px 20px}}
-.fstat-l{{font-size:11px;color:#6b6b80;text-transform:uppercase;letter-spacing:2px;margin-bottom:4px}}
-.fstat-v{{font-family:'Unbounded',sans-serif;font-size:22px;font-weight:700;display:flex;align-items:center;gap:10px}}
+.fstat{{text-align:center;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);border-radius:12px;padding:16px 28px}}
+.fstat-l{{font-size:16px;color:#6b6b80;text-transform:uppercase;letter-spacing:2.5px;font-weight:700;margin-bottom:8px}}
+.fstat-v{{font-family:'Unbounded',sans-serif;font-size:32px;font-weight:700;display:flex;align-items:center;gap:12px}}
 .fn{{display:flex;flex-direction:column;align-items:center;gap:2px;max-width:620px;margin:0 auto}}
 .fs{{display:flex;align-items:center;width:100%}}
 .fw{{flex:1;display:flex;justify-content:center}}
@@ -1769,6 +1772,7 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 <div class="fcard">
   {f"""<div class="fstats">
     <div class="fstat"><div class="fstat-l">Всего</div><div class="fstat-v">{pf_total} {delta_pf_total}</div></div>
+    <div class="fstat"><div class="fstat-l">Выполнено</div><div class="fstat-v" style="color:#22c55e">{pf.get("won", 0) if pf else 0} {delta_pf_won}</div></div>
     <div class="fstat"><div class="fstat-l">Выручка</div><div class="fstat-v" style="color:#a855f7">₪{pf_rev:,.0f} {delta_pf_rev}</div></div>
   </div>""" if pf_total > 0 else ""}
   <div class="fn">{permanent_funnel_html}</div>
@@ -2010,13 +2014,37 @@ def cmd_full(message):
 def cmd_dashboard(message):
     if message.chat.id != MY_CHAT_ID:
         return
-    safe_send(MY_CHAT_ID, "📊 Генерирую дашборд с динамикой...\n⏳ 15-25 секунд")
+    safe_send(MY_CHAT_ID, "📊 Генерирую дашборд с динамикой...\n⏳ Загружаю оба периода параллельно")
     try:
         since, until = get_date_range("month")
-        data = full_analytics(since, until)
-        # Fetch comparison data for previous month
-        safe_send(MY_CHAT_ID, "⏳ Загружаю данные за предыдущий период...")
-        prev_data = fetch_comparison_data(since, until)
+        results = {}
+
+        def _fetch_current():
+            try:
+                results["data"] = full_analytics(since, until)
+            except Exception as e:
+                results["data"] = {"error": str(e)}
+
+        def _fetch_prev():
+            try:
+                results["prev"] = fetch_comparison_data(since, until)
+            except Exception as e:
+                results["prev"] = {}
+
+        t1 = threading.Thread(target=_fetch_current)
+        t2 = threading.Thread(target=_fetch_prev)
+        t1.start()
+        t2.start()
+        t1.join(timeout=180)
+        t2.join(timeout=180)
+
+        data = results.get("data", {})
+        prev_data = results.get("prev", {})
+
+        if "error" in data:
+            safe_send(MY_CHAT_ID, f"❌ Ошибка загрузки данных: {data['error'][:200]}")
+            return
+
         png_path = generate_dashboard_png(data, "Последние 30 дней", prev_data=prev_data)
         with open(png_path, 'rb') as photo:
             bot.send_photo(MY_CHAT_ID, photo, caption="📊 iStudio Performance Dashboard")
@@ -2166,16 +2194,44 @@ def _handle_show(show, since, until, user_text, period=None):
         data.pop("_deal_details", None)
         safe_send(MY_CHAT_ID, generate_response(user_text, data, "branch_compare"))
     elif show == "dashboard":
-        safe_send(MY_CHAT_ID, "📊 Генерирую дашборд с динамикой...\n⏳ 20-30 секунд")
-        data = full_analytics(since, until)
-        safe_send(MY_CHAT_ID, "⏳ Загружаю данные за предыдущий период...")
-        prev_data = fetch_comparison_data(since, until)
+        safe_send(MY_CHAT_ID, "📊 Генерирую дашборд с динамикой...\n⏳ Загружаю оба периода параллельно")
         period_names = {
             "today": "Сегодня", "yesterday": "Вчера", "week": "Неделя",
             "month": "Месяц", "3months": "3 месяца", "6months": "Полгода",
             "year": "Год", "all": "Всё время"
         }
         plabel = period_names.get(period, f"{since} — {until}") if period else f"{since} — {until}"
+
+        # Fetch current and previous period IN PARALLEL
+        results = {}
+        def _fetch_current():
+            try:
+                results["data"] = full_analytics(since, until)
+            except Exception as e:
+                print(f"Dashboard current fetch error: {e}")
+                results["data"] = {"error": str(e)}
+
+        def _fetch_prev():
+            try:
+                results["prev"] = fetch_comparison_data(since, until)
+            except Exception as e:
+                print(f"Dashboard prev fetch error: {e}")
+                results["prev"] = {}
+
+        t1 = threading.Thread(target=_fetch_current)
+        t2 = threading.Thread(target=_fetch_prev)
+        t1.start()
+        t2.start()
+        t1.join(timeout=180)
+        t2.join(timeout=180)
+
+        data = results.get("data", {})
+        prev_data = results.get("prev", {})
+
+        if "error" in data:
+            safe_send(MY_CHAT_ID, f"❌ Ошибка загрузки данных: {data['error'][:200]}")
+            return
+
         png_path = generate_dashboard_png(data, plabel, prev_data=prev_data)
         with open(png_path, 'rb') as photo:
             bot.send_photo(MY_CHAT_ID, photo, caption=f"📊 iStudio Dashboard · {plabel}")
