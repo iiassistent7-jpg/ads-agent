@@ -86,6 +86,54 @@ def get_date_range(period):
     else:
         return str(today), str(today)
 
+def get_previous_period(since, until):
+    """Calculate the previous period of the same length."""
+    try:
+        from_date = datetime.strptime(since, "%Y-%m-%d").date()
+        to_date = datetime.strptime(until, "%Y-%m-%d").date()
+        period_days = (to_date - from_date).days + 1
+        prev_until = from_date - timedelta(days=1)
+        prev_since = prev_until - timedelta(days=period_days - 1)
+        return str(prev_since), str(prev_until)
+    except Exception as e:
+        print(f"get_previous_period error: {e}")
+        return None, None
+
+def calc_delta(current, previous, inverse=False):
+    """
+    Calculate % delta between current and previous values.
+    inverse=True means that growth is BAD (e.g. CPL, CAC — lower is better).
+    Returns dict: {pct, direction, color}
+    """
+    try:
+        cur = float(current or 0)
+        prv = float(previous or 0)
+        if prv == 0:
+            return None
+        pct = round((cur - prv) / prv * 100, 1)
+        if pct == 0:
+            return {"pct": 0, "direction": "flat", "color": "#6b6b80", "symbol": "→"}
+        
+        growing = pct > 0
+        # For inverse metrics (CPL, CAC): growth = bad, decline = good
+        if inverse:
+            good = not growing
+        else:
+            good = growing
+
+        color = "#22c55e" if good else "#ef4444"
+        symbol = "▲" if growing else "▼"
+        return {
+            "pct": abs(pct),
+            "direction": "up" if growing else "down",
+            "color": color,
+            "symbol": symbol,
+            "prev_value": prv,
+        }
+    except Exception as e:
+        print(f"calc_delta error: {e}")
+        return None
+
 def parse_custom_period(text):
     """Parse custom date references like 'за январь', 'за последние 3 месяца'."""
     text_lower = text.lower()
@@ -163,7 +211,6 @@ def get_account_insights(since, until):
 def get_meta_leads(since, until):
     """Fetch leads from Meta Leads Center (forms)."""
     all_leads = []
-    # First get all forms
     url = f"https://graph.facebook.com/v21.0/{META_AD_ACCOUNT}/leadgen_forms"
     params = {"fields": "id,name,status", "access_token": META_ACCESS_TOKEN}
     try:
@@ -192,7 +239,6 @@ def get_meta_leads(since, until):
                 data = resp.json()
                 for lead in data.get("data", []):
                     lead["form_name"] = form_name
-                    lead_time = lead.get("created_time", "")
                     all_leads.append(lead)
                 next_url = data.get("paging", {}).get("next")
                 if next_url:
@@ -203,7 +249,7 @@ def get_meta_leads(since, until):
         except Exception as e:
             print(f"Error fetching leads for form {form_name}: {e}")
             continue
-        time.sleep(0.5)  # Rate limit
+        time.sleep(0.5)
 
     return all_leads
 
@@ -279,7 +325,6 @@ def enrich_insights(insights):
 # amoCRM API
 # ============================================================
 def amocrm_request(endpoint, params=None):
-    """Make authenticated request to amoCRM API v4."""
     if not AMOCRM_TOKEN:
         print("amoCRM token not configured")
         return None
@@ -299,7 +344,6 @@ def amocrm_request(endpoint, params=None):
         return None
 
 def get_amocrm_pipelines():
-    """Get all pipelines (funnels) with stages."""
     data = amocrm_request("leads/pipelines")
     if not data:
         return []
@@ -311,7 +355,7 @@ def get_amocrm_pipelines():
                 "id": s.get("id"),
                 "name": s.get("name"),
                 "sort": s.get("sort", 0),
-                "is_closed": s.get("type", 0) in [0, 1],  # closed won/lost
+                "is_closed": s.get("type", 0) in [0, 1],
             })
         stages.sort(key=lambda x: x["sort"])
         pipelines.append({
@@ -322,7 +366,6 @@ def get_amocrm_pipelines():
     return pipelines
 
 def get_all_amocrm_deals(max_pages=30, date_filter=None):
-    """Fetch all deals with pagination. Optional date filter."""
     all_deals = []
     for page in range(1, max_pages + 1):
         params = {"limit": 250, "page": page, "with": "contacts"}
@@ -342,7 +385,6 @@ def get_all_amocrm_deals(max_pages=30, date_filter=None):
     return all_deals
 
 def get_amocrm_contacts(contact_ids):
-    """Fetch contacts by IDs (batch) with name and phone."""
     contacts = {}
     if not contact_ids:
         return contacts
@@ -374,19 +416,16 @@ def get_amocrm_contacts(contact_ids):
     return contacts
 
 def get_deal_tags(deal):
-    """Extract tags from a deal."""
     tags = (deal.get("_embedded") or {}).get("tags") or []
     return [t.get("name", "") for t in tags]
 
 def extract_fb_tag(tags):
-    """Extract Facebook campaign ID from tags like 'fb14285258249'."""
     for tag in tags:
         if tag.startswith("fb") and len(tag) > 3:
             return tag.rstrip("!")
     return None
 
 def parse_campaign_tag(tags):
-    """Parse procedure/language/budget tag like 'Карбон ИВР 250'."""
     branches = {"Ришон", "Хайфа", "Тель-Авив", "Ашдод", "Раат"}
     for tag in tags:
         if tag.startswith("fb") or tag in branches:
@@ -402,7 +441,6 @@ def parse_campaign_tag(tags):
     return None
 
 def get_deal_branch(tags):
-    """Extract branch from tags."""
     known_branches = ["Ришон", "Хайфа", "Тель-Авив", "Ашдод", "Раат"]
     for tag in tags:
         for b in known_branches:
@@ -411,46 +449,26 @@ def get_deal_branch(tags):
     return "Не указан"
 
 def should_filter_branch(branch, since=None, until=None):
-    """Determine if a deal should be included based on branch and period.
-    
-    Rules:
-    - Always EXCLUDE Ашдод deals (closed branch, bad data)
-    - Always EXCLUDE Раат deals (sold, deleted from CRM anyway)
-    - If period <= 1 year: ONLY include Ришон (main active branch)
-    - If period > 1 year: include ALL except Ашдод and Раат
-    - "Не указан" (no branch tag): always include (most are Rishon)
-    """
-    # Always exclude Ashdod and Raat
     if branch in ["Ашдод", "Раат"]:
-        return False  # exclude
-    
-    # If no date filter — include everything except Ashdod/Raat
+        return False
     if not since or not until:
         return True
-    
-    # Calculate period length
     try:
         from_date = datetime.strptime(since, "%Y-%m-%d").date()
         to_date = datetime.strptime(until, "%Y-%m-%d").date()
         period_days = (to_date - from_date).days
     except:
         return True
-    
-    # If period > 365 days — include all branches (except Ashdod/Raat)
     if period_days > 365:
         return True
-    
-    # Period <= 1 year — only Rishon and unlabeled
     if branch in ["Ришон", "Не указан"]:
         return True
-    
-    return False  # exclude Хайфа, Тель-Авив for short periods
+    return False
 
 # ============================================================
 # DEEP ANALYTICS
 # ============================================================
 def analyze_crm_data(since=None, until=None):
-    """Full CRM analysis with optional date filter."""
     print("Fetching amoCRM data...")
 
     date_filter = None
@@ -501,7 +519,6 @@ def analyze_crm_data(since=None, until=None):
         created_at = deal.get("created_at", 0)
         closed_at = deal.get("closed_at", 0)
 
-        # Filter by branch
         if not should_filter_branch(branch, since, until):
             filtered_out += 1
             continue
@@ -551,7 +568,6 @@ def analyze_crm_data(since=None, until=None):
             elif stage_id in closed_lost_ids:
                 by_campaign_tag[tag_key]["lost"] += 1
 
-        # Collect deal detail for LTV
         deal_info = {
             "id": deal.get("id"),
             "name": deal.get("name", ""),
@@ -568,7 +584,6 @@ def analyze_crm_data(since=None, until=None):
         }
         all_deal_details.append(deal_info)
 
-    # Cleanup prices from campaign tags for JSON serialization
     for tag_key in by_campaign_tag:
         prices = by_campaign_tag[tag_key].pop("prices", [])
         if prices:
@@ -579,13 +594,13 @@ def analyze_crm_data(since=None, until=None):
             by_campaign_tag[tag_key]["avg_deal"] = 0
 
     sorted_campaigns = sorted(by_campaign_tag.items(), key=lambda x: x[1]["revenue"], reverse=True)
-# Split by pipeline
+
     PIPELINE_WORKING = 5896168
     PIPELINE_PERMANENT = 8703286
-    
+
     working_funnel = {"total": 0, "stages": {}, "revenue": 0, "won": 0, "lost": 0}
     permanent_funnel = {"total": 0, "stages": {}, "revenue": 0, "won": 0, "lost": 0}
-    
+
     for deal in deals:
         tags = get_deal_tags(deal)
         branch = get_deal_branch(tags)
@@ -595,7 +610,7 @@ def analyze_crm_data(since=None, until=None):
         price = deal.get("price", 0) or 0
         stage_id = deal.get("status_id", 0)
         stage_name = stage_map.get(stage_id, f"Stage {stage_id}")
-        
+
         if pid == PIPELINE_WORKING:
             working_funnel["total"] += 1
             working_funnel["revenue"] += price
@@ -612,6 +627,7 @@ def analyze_crm_data(since=None, until=None):
                 permanent_funnel["won"] += 1
             elif stage_id in closed_lost_ids:
                 permanent_funnel["lost"] += 1
+
     return {
         "total_deals": total_deals,
         "filtered_out_deals": filtered_out,
@@ -630,29 +646,25 @@ def analyze_crm_data(since=None, until=None):
         "by_campaign_tag": dict(sorted_campaigns[:15]),
         "pipelines": [{"name": p["name"], "stages": [s["name"] for s in p["stages"]]} for p in pipelines],
         "period": {"since": since, "until": until} if since else None,
-        "_deal_details": all_deal_details,  # For LTV analysis
+        "_deal_details": all_deal_details,
     }
 
 def analyze_golden_clients(since=None, until=None):
-    """Find golden clients — repeat buyers, high LTV, long retention. With names and phones."""
     crm = analyze_crm_data(since, until)
     if "error" in crm:
         return crm
 
     deal_details = crm.pop("_deal_details", [])
 
-    # Group by contact
     contact_deals = defaultdict(list)
     for d in deal_details:
         for cid in (d.get("contact_ids") or []):
             contact_deals[cid].append(d)
 
-    # Fetch contact details (names, phones) from amoCRM
     all_contact_ids = list(contact_deals.keys())
     print(f"Fetching {len(all_contact_ids)} contacts from amoCRM...")
     contact_info_map = get_amocrm_contacts(all_contact_ids)
 
-    # Analyze each contact
     golden_clients = []
     repeat_clients = []
     one_time_clients = []
@@ -666,20 +678,17 @@ def analyze_golden_clients(since=None, until=None):
         branches = list(set(d["branch"] for d in deals))
         deal_names = list(set(d["name"] for d in deals if d["name"]))
 
-        # Calculate client lifetime
         dates = [d["created_at"] for d in deals if d["created_at"]]
         if len(dates) >= 2:
             lifetime_days = (max(dates) - min(dates)) / 86400
         else:
             lifetime_days = 0
 
-        # Get contact name and phone
         cinfo = contact_info_map.get(cid, {})
         client_name = cinfo.get("name", "Без имени")
         client_phone = cinfo.get("phone", "")
         client_email = cinfo.get("email", "")
 
-        # Determine client source
         if fb_tags:
             client_source = "Реклама Meta"
             client_source_detail = ", ".join(campaigns) if campaigns else fb_tags[0]
@@ -720,7 +729,6 @@ def analyze_golden_clients(since=None, until=None):
     golden_clients.sort(key=lambda x: x["total_spent"], reverse=True)
     repeat_clients.sort(key=lambda x: x["total_spent"], reverse=True)
 
-    # Which campaigns produce golden clients? (by manual tag)
     campaign_quality = defaultdict(lambda: {"golden": 0, "repeat": 0, "one_time": 0, "total_ltv": 0})
     for c in golden_clients:
         for camp in c["campaigns"]:
@@ -735,7 +743,6 @@ def analyze_golden_clients(since=None, until=None):
             campaign_quality[camp]["one_time"] += 1
             campaign_quality[camp]["total_ltv"] += c["total_spent"]
 
-    # ALSO analyze by specific fb-tag (unique Facebook campaign ID)
     fb_tag_quality = defaultdict(lambda: {"golden": 0, "repeat": 0, "one_time": 0, "total_ltv": 0, "manual_tags": set()})
     for c in golden_clients:
         for ft in c["fb_tags"]:
@@ -753,7 +760,6 @@ def analyze_golden_clients(since=None, until=None):
             fb_tag_quality[ft]["total_ltv"] += c["total_spent"]
             fb_tag_quality[ft]["manual_tags"].update(c["campaigns"])
 
-    # Convert to serializable dict and add avg LTV
     campaign_quality_clean = {}
     for camp, data in campaign_quality.items():
         total_clients = data["golden"] + data["repeat"] + data["one_time"]
@@ -769,15 +775,12 @@ def analyze_golden_clients(since=None, until=None):
 
     sorted_quality = sorted(campaign_quality_clean.items(), key=lambda x: x[1]["quality_score"], reverse=True)
 
-    # Process fb_tag quality — match with Meta campaign names
-    # First try to get Meta campaign names for fb_tags
     fb_to_meta_name = {}
     try:
         all_meta_campaigns = get_all_campaigns("name,id")
         for mc in all_meta_campaigns:
             meta_id = mc.get("id", "")
             meta_name = mc.get("name", "")
-            # fb-tag is like "fb14285258249" — the number is campaign ID
             fb_key = f"fb{meta_id}"
             fb_to_meta_name[fb_key] = meta_name
     except:
@@ -804,7 +807,6 @@ def analyze_golden_clients(since=None, until=None):
 
     sorted_fb_quality = sorted(fb_tag_quality_clean.items(), key=lambda x: x[1]["quality_score"], reverse=True)
 
-    # Source breakdown: Ads vs Referral
     all_clients = golden_clients + repeat_clients + one_time_clients
     from_ads = [c for c in all_clients if c["source"] == "Реклама Meta"]
     from_referral = [c for c in all_clients if c["source"] == "Рекомендация / сарафан"]
@@ -849,7 +851,6 @@ def analyze_golden_clients(since=None, until=None):
     }
 
 def analyze_campaign_roi(since=None, until=None):
-    """Match Meta Ads spend with amoCRM revenue."""
     if not since or not until:
         since, until = get_date_range("all")
     insights = get_account_insights(since, until)
@@ -860,7 +861,6 @@ def analyze_campaign_roi(since=None, until=None):
         return crm
     crm.pop("_deal_details", None)
 
-    # Try to get Meta leads count
     meta_leads = []
     try:
         meta_leads = get_meta_leads(since, until)
@@ -928,7 +928,6 @@ def analyze_campaign_roi(since=None, until=None):
     }
 
 def analyze_funnel(since=None, until=None):
-    """Analyze funnel conversion rates."""
     crm = analyze_crm_data(since, until)
     if "error" in crm:
         return crm
@@ -945,7 +944,6 @@ def analyze_funnel(since=None, until=None):
     }
 
 def analyze_ltv(since=None, until=None):
-    """Analyze LTV by source and campaign with golden client data."""
     crm = analyze_crm_data(since, until)
     if "error" in crm:
         return crm
@@ -965,22 +963,18 @@ def analyze_ltv(since=None, until=None):
     }
 
 def full_analytics(since=None, until=None):
-    """Complete analytics: Meta + Leads + CRM combined."""
     if not since or not until:
         since, until = get_date_range("month")
 
-    # Meta Ads data
     insights = get_account_insights(since, until)
     meta_campaigns = enrich_insights(insights)
 
-    # Meta leads
     meta_leads = []
     try:
         meta_leads = get_meta_leads(since, until)
     except:
         pass
 
-    # CRM data
     crm = analyze_crm_data(since, until)
     if "error" in crm:
         return crm
@@ -1030,6 +1024,101 @@ def full_analytics(since=None, until=None):
     }
 
 # ============================================================
+# COMPARISON DATA FOR DASHBOARD
+# ============================================================
+def fetch_comparison_data(since, until):
+    """
+    Fetch analytics for the PREVIOUS period (same length) to compute deltas.
+    Returns a simplified dict with key metrics only.
+    """
+    prev_since, prev_until = get_previous_period(since, until)
+    if not prev_since:
+        return {}
+
+    print(f"Fetching comparison data: {prev_since} — {prev_until}")
+    try:
+        prev_insights = get_account_insights(prev_since, prev_until)
+        prev_meta = enrich_insights(prev_insights)
+        prev_total_spend = sum(c["spend"] for c in prev_meta)
+        prev_total_leads = sum(c.get("total_leads", 0) for c in prev_meta)
+        prev_avg_cpl = round(prev_total_spend / prev_total_leads, 2) if prev_total_leads > 0 else 0
+    except Exception as e:
+        print(f"Comparison Meta error: {e}")
+        prev_total_spend = 0
+        prev_total_leads = 0
+        prev_avg_cpl = 0
+
+    try:
+        prev_crm = analyze_crm_data(prev_since, prev_until)
+        prev_crm.pop("_deal_details", None)
+        if "error" in prev_crm:
+            prev_crm = {}
+    except Exception as e:
+        print(f"Comparison CRM error: {e}")
+        prev_crm = {}
+
+    prev_total_deals = prev_crm.get("total_deals", 0)
+    prev_total_revenue = prev_crm.get("total_revenue", 0)
+    prev_avg_deal = prev_crm.get("avg_deal", 0)
+    prev_won = prev_crm.get("won_deals", 0)
+
+    wf = prev_crm.get("working_funnel", {})
+    pf = prev_crm.get("permanent_funnel", {})
+    prev_wf_total = wf.get("total", 0) if wf else 0
+    prev_wf_won = wf.get("won", 0) if wf else 0
+    prev_wf_rev = wf.get("revenue", 0) if wf else 0
+    prev_pf_total = pf.get("total", 0) if pf else 0
+    prev_pf_rev = pf.get("revenue", 0) if pf else 0
+
+    prev_conv = round(prev_wf_won / prev_wf_total * 100, 1) if prev_wf_total > 0 else 0
+    prev_ltv = round(prev_pf_rev / prev_pf_total, 0) if prev_pf_total > 0 else 0
+    prev_cac = round((prev_total_spend * 3.2) / prev_wf_won, 0) if prev_wf_won > 0 and prev_total_spend > 0 else 0
+    prev_romi = round((prev_wf_rev - prev_total_spend * 3.2) / (prev_total_spend * 3.2) * 100, 0) if prev_total_spend > 0 else 0
+
+    return {
+        "period": {"since": prev_since, "until": prev_until},
+        # Meta
+        "total_spend": prev_total_spend,
+        "total_leads": prev_total_leads,
+        "avg_cpl": prev_avg_cpl,
+        # CRM
+        "total_deals": prev_total_deals,
+        "total_revenue": prev_total_revenue,
+        "avg_deal": prev_avg_deal,
+        "won_deals": prev_won,
+        # Key indicators
+        "conversion": prev_conv,
+        "ltv": prev_ltv,
+        "cac": prev_cac,
+        "romi": prev_romi,
+        # Funnels
+        "wf_total": prev_wf_total,
+        "wf_won": prev_wf_won,
+        "wf_revenue": prev_wf_rev,
+        "pf_total": prev_pf_total,
+        "pf_revenue": prev_pf_rev,
+    }
+
+def render_delta_html(current, previous, inverse=False, prefix="", suffix=""):
+    """
+    Returns an HTML snippet for a delta badge.
+    inverse=True: growth is bad (red), decline is good (green) — e.g. CPL, CAC.
+    """
+    d = calc_delta(current, previous, inverse=inverse)
+    if d is None:
+        return ""
+    color = d["color"]
+    symbol = d["symbol"]
+    pct = d["pct"]
+    prev_fmt = f"{prefix}{d['prev_value']:,.0f}{suffix}" if "prev_value" in d else ""
+    tooltip = f"Было: {prev_fmt}" if prev_fmt else ""
+    return (
+        f'<span class="delta" style="color:{color}" title="{tooltip}">'
+        f'{symbol} {pct}%'
+        f'</span>'
+    )
+
+# ============================================================
 # FORMAT REPORTS (fallback, no Claude)
 # ============================================================
 def format_report(data):
@@ -1073,7 +1162,6 @@ def format_report(data):
     return header + body + footer
 
 def format_fallback(data, data_type):
-    """Simple fallback formatting without Claude."""
     if "error" in data:
         return f"❌ {data['error']}"
     return f"📊 Данные получены ({data_type}). Обработка временно недоступна."
@@ -1145,13 +1233,11 @@ def detect_intent(user_text):
         except:
             pass
 
-    # Fallback parsing
     text = user_text.lower()
     period = "today"
     show = "spend"
     custom_dates = None
 
-    # Check for specific number of months/weeks/days first
     import re as re_mod
     num_months = re_mod.search(r'(\d+)\s*месяц', text)
     num_weeks = re_mod.search(r'(\d+)\s*недел', text)
@@ -1237,21 +1323,6 @@ ANALYST_PROMPT = """Ты — личный бизнес-аналитик для �
 12. Когда в данных есть имена и телефоны клиентов — ОБЯЗАТЕЛЬНО показывай их. Формат: "Имя — телефон — сколько принёс — сколько визитов — откуда пришёл". Это важнейшая информация для владельца.
 13. Преобразуй даты из timestamp в человеческий формат (например "15 января 2025").
 
-ПРИМЕР ХОРОШЕГО ОТВЕТА для золотых клиентов:
-"🏆 Твоя топ-20 золотых клиентов за полгода:
-
-1. Мария Иванова — +972-50-123-4567
-   Принесла ₪9,550 за 21 визит (средний чек ₪455)
-   Пришла с кампании: Карбон ИВР
-   С нами уже 340 дней
-
-2. Анна Петрова — +972-54-987-6543
-   Принесла ₪7,850 за 10 визитов (средний чек ₪785)
-   Пришла с кампании: 3 зоны за 999
-   С нами 280 дней
-
-💡 Вывод: кампания Карбон ИВР приводит самых лояльных клиентов."
-
 ОРИЕНТИРЫ:
 - Хорошая стоимость обращения: $3-5
 - Хороший процент закрытия: 15-25%
@@ -1261,22 +1332,16 @@ ANALYST_PROMPT = """Ты — личный бизнес-аналитик для �
 КОНТЕКСТ ПО ФИЛИАЛАМ:
 - Сейчас работает только Ришон ле-Цион
 - Ашдод закрыт, Раат продан — их данные отфильтрованы
-- Если в данных есть "branch_filter" — скажи какой фильтр применён
-- "Не указан" в филиале = скорее всего Ришон (у многих клиентов город слетел при удалении Раата из CRM)
+- "Не указан" в филиале = скорее всего Ришон
 
 КОНТЕКСТ ПО ТЕГАМ КАМПАНИЙ:
-- В amoCRM у каждой сделки может быть ДВА типа тегов:
-  1. fb-тег (например fb14285258249) — уникальный ID конкретной кампании в Facebook. Это автоматический тег.
-  2. Ручной тег (например "Карбон ИВР 250+2") — общая группа кампаний, присвоенная владельцем.
-- За одним ручным тегом может стоять НЕСКОЛЬКО разных кампаний Facebook с разной эффективностью.
-- Когда пользователь спрашивает "какую кампанию масштабировать" — давай КОНКРЕТНЫЙ fb-тег и название из Meta Ads, а не общий ручной тег.
-- В данных fb_campaign_quality показывает эффективность КАЖДОЙ конкретной Facebook кампании.
-- Поле meta_campaign_name — это реальное название кампании в Facebook Ads Manager.
-- Если meta_campaign_name пустое или "Не найдена" — кампания могла быть удалена из Meta, но клиенты с неё остались в CRM.
+- fb-тег (например fb14285258249) — уникальный ID конкретной кампании в Facebook
+- Ручной тег (например "Карбон ИВР 250+2") — общая группа кампаний
+- За одним ручным тегом может стоять НЕСКОЛЬКО разных кампаний Facebook
+- meta_campaign_name — реальное название кампании в Facebook Ads Manager
 """
 
 def generate_response(user_text, data, data_type="spend"):
-    # Campaign list — no Claude needed
     if "active_names" in data:
         text = f"📋 Всего: {data['total']}\n🟢 Активных: {data['active_count']} | 🔴 На паузе: {data['paused_count']}\n\n"
         if data["active_names"]:
@@ -1289,7 +1354,6 @@ def generate_response(user_text, data, data_type="spend"):
     if "error" in data:
         return f"❌ {data['error']}"
 
-    # Remove internal data before sending to Claude
     clean_data = {k: v for k, v in data.items() if not k.startswith("_")}
 
     type_labels = {
@@ -1317,7 +1381,6 @@ def generate_response(user_text, data, data_type="spend"):
     if claude_response:
         return claude_response
 
-    # Fallback
     if data_type == "spend":
         return format_report(data)
     return format_fallback(data, data_type)
@@ -1325,11 +1388,109 @@ def generate_response(user_text, data, data_type="spend"):
 # ============================================================
 # MORNING & WEEKLY REPORTS
 # ============================================================
+def send_morning_report():
+    data = fetch_spend_data("yesterday")
+    report = f"🌅 Доброе утро!\n\n" + format_report(data)
+    report += f"\n\n💡 Напиши 'покажи за неделю' или 'золотые клиенты' для глубокой аналитики"
+    safe_send(MY_CHAT_ID, report)
+
+def send_weekly_crm_report():
+    try:
+        safe_send(MY_CHAT_ID, "📊 Еженедельный отчёт...\n⏳ Собираю данные из Meta Ads и amoCRM")
+        data = full_analytics()
+        data["_type"] = "full_report"
+        report = generate_response("еженедельный полный отчёт по рекламе и CRM", data, "full_report")
+        safe_send(MY_CHAT_ID, report)
+    except Exception as e:
+        print(f"Weekly report error: {e}")
+        safe_send(MY_CHAT_ID, f"❌ Ошибка еженедельного отчёта: {e}")
+
 # ============================================================
-# DASHBOARD PNG GENERATOR
+# SAFE SEND
 # ============================================================
-def generate_dashboard_png(data, period_label="Сегодня"):
-    """Generate a premium 3D dashboard PNG from analytics data. Returns file path."""
+def safe_send(chat_id, text, max_len=4000):
+    if not text:
+        text = "⚠️ Пустой ответ"
+    if len(text) <= max_len:
+        try:
+            bot.send_message(chat_id, text)
+        except Exception as e:
+            print(f"Send error: {e}")
+        return
+
+    parts = []
+    while text:
+        if len(text) <= max_len:
+            parts.append(text)
+            break
+        split_at = text.rfind("\n\n", 0, max_len)
+        if split_at == -1:
+            split_at = text.rfind("\n", 0, max_len)
+        if split_at == -1:
+            split_at = max_len
+        parts.append(text[:split_at])
+        text = text[split_at:].lstrip("\n")
+
+    for part in parts:
+        try:
+            bot.send_message(chat_id, part)
+            time.sleep(0.3)
+        except Exception as e:
+            print(f"Send error: {e}")
+
+# ============================================================
+# FETCH HELPERS
+# ============================================================
+def fetch_spend_data(period, since=None, until=None):
+    if not since or not until:
+        since, until = get_date_range(period)
+    insights = get_account_insights(since, until)
+    campaigns = enrich_insights(insights)
+    total_spend = sum(c["spend"] for c in campaigns)
+
+    if period == "today" and total_spend == 0:
+        y_since, y_until = get_date_range("yesterday")
+        y_insights = get_account_insights(y_since, y_until)
+        y_campaigns = enrich_insights(y_insights)
+        y_spend = sum(c["spend"] for c in y_campaigns)
+
+        try:
+            all_camps = get_all_campaigns("name,effective_status")
+            active_names = [c.get("name", "—") for c in all_camps if c.get("effective_status") == "ACTIVE"]
+            paused_count = len([c for c in all_camps if c.get("effective_status") == "PAUSED"])
+        except:
+            active_names = []
+            paused_count = 0
+
+        return {
+            "period": period, "since": since, "until": until,
+            "campaigns": campaigns, "total_spend": 0,
+            "note": "Meta API ещё не обновил данные за сегодня (задержка до нескольких часов). Показываю вчерашние данные для контекста.",
+            "yesterday_data": {
+                "since": y_since, "until": y_until,
+                "campaigns": y_campaigns, "total_spend": round(y_spend, 2),
+            },
+            "active_campaigns": active_names,
+            "active_count": len(active_names),
+            "paused_count": paused_count,
+        }
+
+    return {"period": period, "since": since, "until": until, "campaigns": campaigns, "total_spend": round(total_spend, 2)}
+
+def fetch_all_campaigns_list():
+    camps = get_all_campaigns()
+    active = [c.get("name", "—") for c in camps if c.get("effective_status") == "ACTIVE"]
+    paused = len([c for c in camps if c.get("effective_status") == "PAUSED"])
+    return {"total": len(camps), "active_names": active, "active_count": len(active), "paused_count": paused}
+
+# ============================================================
+# DASHBOARD PNG GENERATOR (with period comparison)
+# ============================================================
+def generate_dashboard_png(data, period_label="Сегодня", prev_data=None):
+    """
+    Generate a premium dashboard PNG.
+    prev_data: dict with previous period metrics for delta comparison.
+    """
     meta = data.get("meta_ads", data)
     crm = data.get("crm", data)
     total_spend = meta.get("total_spend", data.get("total_spend", 0))
@@ -1346,6 +1507,7 @@ def generate_dashboard_png(data, period_label="Сегодня"):
     overall_roi = data.get("overall_roi", data.get("total_roi", 0))
     if overall_roi == 0 and total_spend > 0 and total_revenue > 0:
         overall_roi = round((total_revenue - total_spend * 3.6) / (total_spend * 3.6) * 100, 1)
+
     tc = meta.get("top_campaigns", [])
     if isinstance(tc, dict):
         tc = [{"name": k, "spend": v.get("spend", 0), "leads": v.get("deals", 0)} for k, v in tc.items()]
@@ -1354,6 +1516,7 @@ def generate_dashboard_png(data, period_label="Сегодня"):
     bt = crm.get("by_campaign_tag", data.get("by_campaign_tag", {}))
     if not tc and bt:
         tc = [{"name": k, "spend": 0, "leads": v.get("deals", 0), "revenue": v.get("revenue", 0)} for k, v in list(bt.items())[:5]]
+
     camps_html = ""
     for i, c in enumerate(tc[:5]):
         nm = c.get("name", c.get("campaign_name", "?"))
@@ -1371,10 +1534,10 @@ def generate_dashboard_png(data, period_label="Сегодня"):
         camps_html += f'<div class="cr"><span class="c0">{i+1}</span><span class="c1">{nm}</span><span class="c2">{"$"+f"{sp:,.0f}" if sp>0 else "—"}</span><span class="c3">{le if le>0 else "—"}</span><span class="c4 {cls}">{val}</span></div>'
     if not camps_html:
         camps_html = '<div class="cr" style="justify-content:center;color:#6b6b80">Нет данных</div>'
-   # === Working funnel (new clients from ads) ===
+
     wf = data.get("crm", data).get("working_funnel", data.get("working_funnel", {}))
     pf = data.get("crm", data).get("permanent_funnel", data.get("permanent_funnel", {}))
-    
+
     def build_funnel_html(funnel_data, color1, color2):
         if not funnel_data or funnel_data.get("total", 0) == 0:
             return '<div style="text-align:center;color:#6b6b80;padding:16px">Нет данных</div>'
@@ -1414,29 +1577,34 @@ def generate_dashboard_png(data, period_label="Сегодня"):
         html += f'<span style="color:#f0c040">Выручка: ₪{rev:,.0f}</span>'
         html += f'</div>'
         return html
-    
+
     working_funnel_html = build_funnel_html(wf, "#3b82f6", "#60a5fa")
     permanent_funnel_html = build_funnel_html(pf, "#a855f7", "#c084fc")
+
     if total_revenue > 0 and total_spend > 0:
         profit_ok = (total_revenue - total_spend * 3.6) > 0
         status_txt = "БИЗНЕС В ПЛЮСЕ" if profit_ok else "ТРЕБУЕТ ВНИМАНИЯ"
         status_col = "#22c55e" if profit_ok else "#ef4444"
     elif total_revenue > 0: profit_ok, status_txt, status_col = True, "ДАННЫЕ ПОЛУЧЕНЫ", "#22c55e"
     else: profit_ok, status_txt, status_col = True, "ДАННЫЕ ПОЛУЧЕНЫ", "#3b82f6"
+
     if total_deals > 0 and avg_deal > 0:
         lost_rev = max(0, (total_deals - won_deals - lost_deals) * avg_deal)
         lost_n = max(0, total_deals - won_deals - lost_deals)
     else: lost_rev, lost_n = 0, 0
+
     wf_won = wf.get("won", 0) if wf else 0
     cac_ils = round((total_spend * 3.6) / wf_won, 0) if wf_won > 0 and total_spend > 0 else 0
     pf_total = pf.get("total", 0) if pf else 0
     pf_rev = pf.get("revenue", 0) if pf else 0
     ltv_ils = round(pf_rev / pf_total, 0) if pf_total > 0 else 0
+
     now = get_israel_now()
     date_str = now.strftime("%d.%m.%Y %H:%M")
     pi = data.get("period", {})
     if isinstance(pi, dict) and pi.get("since"):
         period_label = f'{pi["since"]} — {pi["until"]}'
+
     wf_rev = wf.get("revenue", 0) if wf else 0
     spend_ils = total_spend * 3.2
     real_romi = round((wf_rev - spend_ils) / spend_ils * 100, 0) if spend_ils > 0 else 0
@@ -1444,6 +1612,60 @@ def generate_dashboard_png(data, period_label="Сегодня"):
     wf_total = wf.get("total", 0) if wf else 0
     real_conv = round(wf_won / wf_total * 100, 1) if wf_total > 0 else 0
     conv_col = "green" if real_conv >= 20 else ("gold" if real_conv >= 10 else "red")
+
+    # ---- DELTA BADGES ----
+    p = prev_data or {}
+
+    def d_badge(cur, prv, inverse=False, is_pct=False):
+        """Returns HTML string for a delta badge, or empty."""
+        try:
+            cur_f = float(cur or 0)
+            prv_f = float(prv or 0)
+            if prv_f == 0:
+                return ""
+            pct = round((cur_f - prv_f) / prv_f * 100, 1)
+            if pct == 0:
+                return '<span class="db-flat">→ 0%</span>'
+            growing = pct > 0
+            good = (not growing) if inverse else growing
+            color = "#22c55e" if good else "#ef4444"
+            arrow = "▲" if growing else "▼"
+            return f'<span class="db-delta" style="color:{color}">{arrow} {abs(pct):.1f}%</span>'
+        except:
+            return ""
+
+    # Previous period label for subtitle
+    prev_period_label = ""
+    if p.get("period"):
+        pp = p["period"]
+        prev_period_label = f'vs {pp.get("since", "")} — {pp.get("until", "")}'
+
+    # Compute deltas for all key metrics
+    delta_spend      = d_badge(total_spend,   p.get("total_spend"),   inverse=True)
+    delta_leads      = d_badge(total_leads,   p.get("total_leads"))
+    delta_cpl        = d_badge(avg_cpl,       p.get("avg_cpl"),       inverse=True)
+    delta_conv_meta  = d_badge(conversion,    p.get("conversion"))
+    delta_deals      = d_badge(total_deals,   p.get("total_deals"))
+    delta_won        = d_badge(won_deals,     p.get("won_deals"))
+    delta_revenue    = d_badge(total_revenue, p.get("total_revenue"))
+    delta_avg_deal   = d_badge(avg_deal,      p.get("avg_deal"))
+    delta_cac        = d_badge(cac_ils,       p.get("cac"),           inverse=True)
+    delta_ltv        = d_badge(ltv_ils,       p.get("ltv"))
+    delta_romi       = d_badge(real_romi,     p.get("romi"))
+    delta_real_conv  = d_badge(real_conv,     p.get("conversion"))
+
+    # Delta for funnel rows (wf vs prev wf)
+    prev_wf_total   = p.get("wf_total", 0)
+    prev_wf_won     = p.get("wf_won", 0)
+    prev_wf_rev     = p.get("wf_revenue", 0)
+    prev_pf_total   = p.get("pf_total", 0)
+    prev_pf_rev     = p.get("pf_revenue", 0)
+
+    delta_wf_total  = d_badge(wf_total,  prev_wf_total)
+    delta_wf_won    = d_badge(wf_won,    prev_wf_won)
+    delta_wf_rev    = d_badge(wf_rev,    prev_wf_rev)
+    delta_pf_total  = d_badge(pf_total,  prev_pf_total)
+    delta_pf_rev    = d_badge(pf_rev,    prev_pf_rev)
 
     html = f'''<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 @import url('https://fonts.googleapis.com/css2?family=Unbounded:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
@@ -1458,6 +1680,7 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 .lg{{font-family:'Unbounded',sans-serif;font-size:36px;font-weight:900;letter-spacing:-1.5px;background:linear-gradient(135deg,#f0c040,#ffd700,#f5d060,#b8922e);-webkit-background-clip:text;-webkit-text-fill-color:transparent}}
 .hs{{font-size:10px;color:#6b6b80;letter-spacing:5px;text-transform:uppercase;margin:4px 0 14px}}
 .badge{{display:inline-block;padding:12px 28px;border:1px solid rgba(255,255,255,.06);border-radius:24px;font-size:20px;font-weight:700;color:#6b6b80;background:rgba(18,18,28,.85)}}
+.vs-label{{font-size:11px;color:#4a4a5a;letter-spacing:3px;text-transform:uppercase;margin-top:8px}}
 .sb{{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:18px}}
 .sd{{width:9px;height:9px;border-radius:50%;background:{status_col};box-shadow:0 0 12px {status_col}80,0 0 30px {status_col}40}}
 .stx{{font-family:'Unbounded',sans-serif;font-size:22px;font-weight:900;color:{status_col};letter-spacing:2px}}
@@ -1467,15 +1690,21 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 .card::before{{content:'';position:absolute;top:0;left:0;right:0;height:50%;background:linear-gradient(180deg,rgba(255,255,255,.04),transparent);border-radius:18px 18px 0 0;pointer-events:none}}
 .cl{{font-size:20px;color:#e0e0f0;font-weight:700;text-transform:uppercase;letter-spacing:2.5px;margin-bottom:10px}}
 .cv{{font-family:'Unbounded',sans-serif;font-size:46px;font-weight:800;line-height:1;text-shadow:0 2px 8px rgba(0,0,0,.3)}}
+/* Delta badges */
+.db-delta{{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;padding:3px 10px;border-radius:20px;background:rgba(255,255,255,.06);margin-top:8px;letter-spacing:0.5px}}
+.db-flat{{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:600;padding:3px 10px;border-radius:20px;background:rgba(255,255,255,.04);color:#4a4a5a;margin-top:8px}}
 .sec{{font-family:'Unbounded',sans-serif;font-size:20px;font-weight:700;color:#e8e8f0;letter-spacing:4px;text-transform:uppercase;margin:32px 0 16px;display:flex;align-items:center;justify-content:center;gap:12px}}
-.sec::after{{content:none}}
 .fcard{{background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:18px;padding:28px 24px;margin-bottom:14px;backdrop-filter:blur(20px);box-shadow:0 8px 32px rgba(0,0,0,.5),0 1px 0 rgba(255,255,255,.04)inset;overflow:hidden}}
+.fstats{{display:flex;gap:24px;justify-content:center;margin-bottom:16px;flex-wrap:wrap}}
+.fstat{{text-align:center;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);border-radius:12px;padding:12px 20px}}
+.fstat-l{{font-size:11px;color:#6b6b80;text-transform:uppercase;letter-spacing:2px;margin-bottom:4px}}
+.fstat-v{{font-family:'Unbounded',sans-serif;font-size:22px;font-weight:700}}
 .fn{{display:flex;flex-direction:column;align-items:center;gap:2px;max-width:620px;margin:0 auto}}
 .fs{{display:flex;align-items:center;width:100%}}
 .fw{{flex:1;display:flex;justify-content:center}}
 .fb{{height:56px;border-radius:10px;display:flex;align-items:center;justify-content:center;position:relative;box-shadow:0 4px 16px rgba(0,0,0,.4),0 2px 0 rgba(255,255,255,.15)inset;transform:perspective(500px)rotateX(5deg)}}
 .fb::after{{content:'';position:absolute;top:0;left:0;right:0;height:50%;background:linear-gradient(180deg,rgba(255,255,255,.18),transparent);border-radius:10px 10px 0 0;pointer-events:none}}
-.ft{{font-family:'Unbounded',sans-serif;font-size:30px;font-weight:800;font-weight:700;color:#fff;text-shadow:0 2px 4px rgba(0,0,0,.4);position:relative;z-index:1}}
+.ft{{font-family:'Unbounded',sans-serif;font-size:30px;font-weight:800;color:#fff;text-shadow:0 2px 4px rgba(0,0,0,.4);position:relative;z-index:1}}
 .fl{{position:absolute;right:-200px;font-size:20px;color:#e0e0f0;font-weight:700;text-transform:uppercase;letter-spacing:1px;white-space:nowrap;width:130px;z-index:1}}
 .fv{{position:absolute;left:-90px;font-size:20px;font-weight:600;white-space:nowrap;width:50px;text-align:right}}
 .fv.good{{color:#22c55e}}.fv.warn{{color:#f97316}}.fv.bad{{color:#ef4444}}
@@ -1497,38 +1726,125 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 .pill-v.gold{{color:#f0c040}}.pill-v.green{{color:#22c55e}}.pill-v.red{{color:#ef4444}}.pill-v.blue{{color:#3b82f6}}
 .footer{{text-align:center;padding:24px 0 8px;font-size:9px;color:#3a3a50;letter-spacing:2px;text-transform:uppercase}}
 </style></head><body><div class="gr"></div><div class="db">
-<div class="hd"><div class="lg">iStudio</div><div class="hs"></div><div class="badge">{period_label}</div>
-<div class="sb"><div class="sd"></div><div class="stx">{status_txt}</div></div></div>
+<div class="hd">
+  <div class="lg">iStudio</div>
+  <div class="hs"></div>
+  <div class="badge">{period_label}</div>
+  {f'<div class="vs-label">{prev_period_label}</div>' if prev_period_label else ''}
+  <div class="sb"><div class="sd"></div><div class="stx">{status_txt}</div></div>
+</div>
+
 <div class="sec">Meta Ads</div>
 <div class="g4">
-<div class="card"><div class="cl">Расход</div><div class="cv">${total_spend:,.0f}</div></div>
-<div class="card"><div class="cl">Лиды</div><div class="cv">{total_leads}</div></div>
-<div class="card"><div class="cl">CPL</div><div class="cv">${avg_cpl:.2f}</div></div>
-<div class="card"><div class="cl">Конверсия</div><div class="cv">{conversion}%</div></div></div>
+  <div class="card">
+    <div class="cl">Расход</div>
+    <div class="cv">${total_spend:,.0f}</div>
+    {delta_spend}
+  </div>
+  <div class="card">
+    <div class="cl">Лиды</div>
+    <div class="cv">{total_leads}</div>
+    {delta_leads}
+  </div>
+  <div class="card">
+    <div class="cl">CPL</div>
+    <div class="cv">${avg_cpl:.2f}</div>
+    {delta_cpl}
+  </div>
+  <div class="card">
+    <div class="cl">Конверсия</div>
+    <div class="cv">{conversion}%</div>
+    {delta_conv_meta}
+  </div>
+</div>
+
 <div class="sec">Рабочая воронка (новые клиенты)</div>
-<div class="fcard"><div class="fn">{working_funnel_html}</div></div>
+<div class="fcard">
+  {f"""<div class="fstats">
+    <div class="fstat"><div class="fstat-l">Заявок</div><div class="fstat-v">{wf_total} {delta_wf_total}</div></div>
+    <div class="fstat"><div class="fstat-l">Выполнено</div><div class="fstat-v" style="color:#22c55e">{wf_won} {delta_wf_won}</div></div>
+    <div class="fstat"><div class="fstat-l">Выручка</div><div class="fstat-v" style="color:#f0c040">₪{wf_rev:,.0f} {delta_wf_rev}</div></div>
+  </div>""" if wf_total > 0 else ""}
+  <div class="fn">{working_funnel_html}</div>
+</div>
+
 <div class="sec">Постоянные клиенты</div>
-<div class="fcard"><div class="fn">{permanent_funnel_html}</div></div>
+<div class="fcard">
+  {f"""<div class="fstats">
+    <div class="fstat"><div class="fstat-l">Всего</div><div class="fstat-v">{pf_total} {delta_pf_total}</div></div>
+    <div class="fstat"><div class="fstat-l">Выручка</div><div class="fstat-v" style="color:#a855f7">₪{pf_rev:,.0f} {delta_pf_rev}</div></div>
+  </div>""" if pf_total > 0 else ""}
+  <div class="fn">{permanent_funnel_html}</div>
+</div>
+
 <div class="sec">amoCRM</div>
 <div class="g4">
-<div class="card"><div class="cl">Сделок</div><div class="cv">{total_deals}</div></div>
-<div class="card"><div class="cl">Продаж</div><div class="cv" style="color:#22c55e">{won_deals}</div></div>
-<div class="card"><div class="cl">Выручка</div><div class="cv" style="color:#22c55e">₪{total_revenue:,.0f}</div></div>
-<div class="card"><div class="cl">Ср. чек</div><div class="cv">₪{avg_deal:,.0f}</div></div></div>
+  <div class="card">
+    <div class="cl">Сделок</div>
+    <div class="cv">{total_deals}</div>
+    {delta_deals}
+  </div>
+  <div class="card">
+    <div class="cl">Продаж</div>
+    <div class="cv" style="color:#22c55e">{won_deals}</div>
+    {delta_won}
+  </div>
+  <div class="card">
+    <div class="cl">Выручка</div>
+    <div class="cv" style="color:#22c55e">₪{total_revenue:,.0f}</div>
+    {delta_revenue}
+  </div>
+  <div class="card">
+    <div class="cl">Ср. чек</div>
+    <div class="cv">₪{avg_deal:,.0f}</div>
+    {delta_avg_deal}
+  </div>
+</div>
+
 <div class="sec">Кампании</div>
 <div class="card">
-<div class="cr" style="color:#6b6b80;font-size:13px;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;border-bottom:1px solid rgba(255,255,255,.06)!important;padding-bottom:8px!important">
-<span class="c0">#</span><span class="c1">Кампания</span><span class="c2">Расход</span><span class="c3">Лиды</span><span class="c4">CPL</span></div>
-{camps_html}</div>
+  <div class="cr" style="color:#6b6b80;font-size:13px;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;border-bottom:1px solid rgba(255,255,255,.06)!important;padding-bottom:8px!important">
+    <span class="c0">#</span><span class="c1">Кампания</span><span class="c2">Расход</span><span class="c3">Лиды</span><span class="c4">CPL</span>
+  </div>
+  {camps_html}
+</div>
+
 <div class="g2" style="margin-top:14px">
-<div class="profit"><div class="profit-l">{"Прибыль" if profit_ok else "Выручка"}</div><div class="profit-v"><em>₪</em>{abs(total_revenue - total_spend * 3.2):,.0f}</div></div>
-<div class="lost"><div class="lost-l">Упущенная выручка</div><div class="lost-v">₪{lost_rev:,.0f}</div><div class="lost-s">{lost_n} сделок без результата</div></div></div>
+  <div class="profit">
+    <div class="profit-l">{"Прибыль" if profit_ok else "Выручка"}</div>
+    <div class="profit-v"><em>₪</em>{abs(total_revenue - total_spend * 3.2):,.0f}</div>
+  </div>
+  <div class="lost">
+    <div class="lost-l">Упущенная выручка</div>
+    <div class="lost-v">₪{lost_rev:,.0f}</div>
+    <div class="lost-s">{lost_n} сделок без результата</div>
+  </div>
+</div>
+
 <div class="sec">Ключевые показатели</div>
 <div class="g4">
-<div class="pill"><div class="pill-l">CAC</div><div class="pill-v gold">{"₪"+f"{cac_ils:.0f}" if cac_ils>0 else "—"}</div></div>
-<div class="pill"><div class="pill-l">LTV</div><div class="pill-v blue">{"₪"+f"{ltv_ils:.0f}" if ltv_ils>0 else "—"}</div></div>
-<div class="pill"><div class="pill-l">ROMI</div><div class="pill-v {roi_col}">{real_romi:.0f}%</div></div>
-<div class="pill"><div class="pill-l">Конверсия</div><div class="pill-v {conv_col}">{real_conv}%</div></div>
+  <div class="pill">
+    <div class="pill-l">CAC</div>
+    <div class="pill-v gold">{"₪"+f"{cac_ils:.0f}" if cac_ils>0 else "—"}</div>
+    {delta_cac}
+  </div>
+  <div class="pill">
+    <div class="pill-l">LTV</div>
+    <div class="pill-v blue">{"₪"+f"{ltv_ils:.0f}" if ltv_ils>0 else "—"}</div>
+    {delta_ltv}
+  </div>
+  <div class="pill">
+    <div class="pill-l">ROMI</div>
+    <div class="pill-v {roi_col}">{real_romi:.0f}%</div>
+    {delta_romi}
+  </div>
+  <div class="pill">
+    <div class="pill-l">Конверсия</div>
+    <div class="pill-v {conv_col}">{real_conv}%</div>
+    {delta_real_conv}
+  </div>
+</div>
+
 <div class="footer">iStudio Performance Dashboard · Бот Рекламщик · {date_str}</div>
 </div></body></html>'''
 
@@ -1552,104 +1868,6 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
         try: os.unlink(html_path)
         except: pass
     return png_path
-def send_morning_report():
-    data = fetch_spend_data("yesterday")
-    report = f"🌅 Доброе утро!\n\n" + format_report(data)
-    report += f"\n\n💡 Напиши 'покажи за неделю' или 'золотые клиенты' для глубокой аналитики"
-    safe_send(MY_CHAT_ID, report)
-
-def send_weekly_crm_report():
-    try:
-        safe_send(MY_CHAT_ID, "📊 Еженедельный отчёт...\n⏳ Собираю данные из Meta Ads и amoCRM")
-        data = full_analytics()
-        data["_type"] = "full_report"
-        report = generate_response("еженедельный полный отчёт по рекламе и CRM", data, "full_report")
-        safe_send(MY_CHAT_ID, report)
-    except Exception as e:
-        print(f"Weekly report error: {e}")
-        safe_send(MY_CHAT_ID, f"❌ Ошибка еженедельного отчёта: {e}")
-
-# ============================================================
-# SAFE SEND (split long messages)
-# ============================================================
-def safe_send(chat_id, text, max_len=4000):
-    """Send message, splitting if too long for Telegram."""
-    if not text:
-        text = "⚠️ Пустой ответ"
-    if len(text) <= max_len:
-        try:
-            bot.send_message(chat_id, text)
-        except Exception as e:
-            print(f"Send error: {e}")
-        return
-
-    # Split by double newline or at max_len
-    parts = []
-    while text:
-        if len(text) <= max_len:
-            parts.append(text)
-            break
-        split_at = text.rfind("\n\n", 0, max_len)
-        if split_at == -1:
-            split_at = text.rfind("\n", 0, max_len)
-        if split_at == -1:
-            split_at = max_len
-        parts.append(text[:split_at])
-        text = text[split_at:].lstrip("\n")
-
-    for part in parts:
-        try:
-            bot.send_message(chat_id, part)
-            time.sleep(0.3)
-        except Exception as e:
-            print(f"Send error: {e}")
-
-# ============================================================
-# FETCH HELPERS
-# ============================================================
-def fetch_spend_data(period, since=None, until=None):
-    if not since or not until:
-        since, until = get_date_range(period)
-    insights = get_account_insights(since, until)
-    campaigns = enrich_insights(insights)
-    total_spend = sum(c["spend"] for c in campaigns)
-
-    # If today returns $0 — also fetch yesterday and active campaigns for context
-    if period == "today" and total_spend == 0:
-        y_since, y_until = get_date_range("yesterday")
-        y_insights = get_account_insights(y_since, y_until)
-        y_campaigns = enrich_insights(y_insights)
-        y_spend = sum(c["spend"] for c in y_campaigns)
-
-        # Also get active campaigns list
-        try:
-            all_camps = get_all_campaigns("name,effective_status")
-            active_names = [c.get("name", "—") for c in all_camps if c.get("effective_status") == "ACTIVE"]
-            paused_count = len([c for c in all_camps if c.get("effective_status") == "PAUSED"])
-        except:
-            active_names = []
-            paused_count = 0
-
-        return {
-            "period": period, "since": since, "until": until,
-            "campaigns": campaigns, "total_spend": 0,
-            "note": "Meta API ещё не обновил данные за сегодня (задержка до нескольких часов). Показываю вчерашние данные для контекста.",
-            "yesterday_data": {
-                "since": y_since, "until": y_until,
-                "campaigns": y_campaigns, "total_spend": round(y_spend, 2),
-            },
-            "active_campaigns": active_names,
-            "active_count": len(active_names),
-            "paused_count": paused_count,
-        }
-
-    return {"period": period, "since": since, "until": until, "campaigns": campaigns, "total_spend": round(total_spend, 2)}
-
-def fetch_all_campaigns_list():
-    camps = get_all_campaigns()
-    active = [c.get("name", "—") for c in camps if c.get("effective_status") == "ACTIVE"]
-    paused = len([c for c in camps if c.get("effective_status") == "PAUSED"])
-    return {"total": len(camps), "active_names": active, "active_count": len(active), "paused_count": paused}
 
 # ============================================================
 # TELEGRAM HANDLERS
@@ -1795,16 +2013,21 @@ def cmd_full(message):
 def cmd_dashboard(message):
     if message.chat.id != MY_CHAT_ID:
         return
-    safe_send(MY_CHAT_ID, "📊 Генерирую дашборд...\n⏳ 10-15 секунд")
+    safe_send(MY_CHAT_ID, "📊 Генерирую дашборд с динамикой...\n⏳ 15-25 секунд")
     try:
-        data = full_analytics()
-        png_path = generate_dashboard_png(data, "Последние 30 дней")
+        since, until = get_date_range("month")
+        data = full_analytics(since, until)
+        # Fetch comparison data for previous month
+        safe_send(MY_CHAT_ID, "⏳ Загружаю данные за предыдущий период...")
+        prev_data = fetch_comparison_data(since, until)
+        png_path = generate_dashboard_png(data, "Последние 30 дней", prev_data=prev_data)
         with open(png_path, 'rb') as photo:
             bot.send_photo(MY_CHAT_ID, photo, caption="📊 iStudio Performance Dashboard")
         os.unlink(png_path)
     except Exception as e:
         print(f"Dashboard error: {e}")
         safe_send(MY_CHAT_ID, f"❌ Ошибка генерации дашборда: {str(e)[:200]}")
+
 @bot.message_handler(commands=["debug"])
 def cmd_debug(message):
     if message.chat.id != MY_CHAT_ID:
@@ -1813,20 +2036,17 @@ def cmd_debug(message):
 
     report = "🔧 ДИАГНОСТИКА amoCRM\n\n"
 
-    # 1. Pipelines
     pipelines = get_amocrm_pipelines()
     report += "📋 ВОРОНКИ:\n"
     for p in pipelines:
         report += f"\n  Воронка: {p['name']} (ID: {p['id']})\n"
         report += f"  Этапы: {', '.join(s['name'] for s in p['stages'])}\n"
 
-    # 2. Get recent deals from "Неразобранные" and others — sample 20
     report += "\n\n📊 ПОСЛЕДНИЕ 20 СДЕЛОК (полные поля):\n"
     data = amocrm_request("leads", {"limit": 20, "order[created_at]": "desc", "with": "contacts"})
     if data:
         deals = (data.get("_embedded") or {}).get("leads") or []
         all_tags_found = set()
-        all_sources_found = set()
         all_pipelines_found = set()
 
         for i, deal in enumerate(deals[:20]):
@@ -1835,7 +2055,6 @@ def cmd_debug(message):
             pipeline_id = deal.get("pipeline_id", 0)
             all_pipelines_found.add(pipeline_id)
 
-            # Get custom fields
             custom_fields = {}
             for cf in (deal.get("custom_fields_values") or []):
                 field_name = cf.get("field_name", cf.get("field_id", "?"))
@@ -1843,7 +2062,6 @@ def cmd_debug(message):
                 val = values[0].get("value", "") if values else ""
                 custom_fields[field_name] = val
 
-            # Source info
             source_info = deal.get("_embedded", {}) or {}
             source = source_info.get("source", {}) if isinstance(source_info, dict) else {}
 
@@ -1855,42 +2073,10 @@ def cmd_debug(message):
             report += f"  Теги: {tags if tags else 'НЕТ'}\n"
             if custom_fields:
                 report += f"  Доп.поля: {json.dumps(custom_fields, ensure_ascii=False)}\n"
-            report += f"  Source (embedded): {json.dumps(source, ensure_ascii=False, default=str)[:200]}\n"
-
-            # Check for _source field at top level
-            for key in deal:
-                if "source" in key.lower() or "utm" in key.lower() or "origin" in key.lower():
-                    report += f"  {key}: {deal[key]}\n"
 
         report += f"\n\n📈 СВОДКА:\n"
         report += f"  Все найденные теги: {sorted(all_tags_found) if all_tags_found else 'НЕТ ТЕГОВ'}\n"
         report += f"  Pipeline IDs: {sorted(all_pipelines_found)}\n"
-
-    # 3. Check for "Заявка с сайта" tag
-    report += "\n\n🔎 ПОИСК ТЕГА 'Заявка с сайта':\n"
-    search_data = amocrm_request("leads", {
-        "limit": 5,
-        "filter[tags_name][]": "Заявка с сайта",
-    })
-    if search_data:
-        found_deals = (search_data.get("_embedded") or {}).get("leads") or []
-        report += f"  Найдено сделок с тегом: {len(found_deals)}\n"
-        for d in found_deals[:3]:
-            report += f"  - {d.get('name', '?')} | Цена: {d.get('price', 0)} | Теги: {get_deal_tags(d)}\n"
-    else:
-        report += "  Тег не найден\n"
-
-    # 4. Search for site/google related tags
-    report += "\n🔎 ПОИСК ДРУГИХ ТЕГОВ (сайт, google, site, web, gmap):\n"
-    for search_tag in ["сайт", "site", "google", "web", "gmap", "Google Maps", "Гугл"]:
-        search_data = amocrm_request("leads", {
-            "limit": 3,
-            "filter[tags_name][]": search_tag,
-        })
-        if search_data:
-            found = (search_data.get("_embedded") or {}).get("leads") or []
-            if found:
-                report += f"  Тег '{search_tag}': {len(found)} сделок\n"
 
     safe_send(MY_CHAT_ID, report)
 
@@ -1898,7 +2084,6 @@ def cmd_debug(message):
 # VOICE MESSAGE HANDLER
 # ============================================================
 def transcribe_voice(message):
-    """Download voice message from Telegram and transcribe with OpenAI Whisper."""
     if not openai_client:
         return None
     try:
@@ -1929,6 +2114,81 @@ def transcribe_voice(message):
             pass
         return None
 
+def _handle_show(show, since, until, user_text, period=None):
+    """Shared handler logic for both text and voice."""
+    if show == "all_campaigns":
+        data = fetch_all_campaigns_list()
+        safe_send(MY_CHAT_ID, generate_response(user_text, data))
+    elif show == "crm":
+        data = analyze_crm_data(since, until)
+        data.pop("_deal_details", None)
+        safe_send(MY_CHAT_ID, generate_response(user_text, data, "crm"))
+    elif show == "roi":
+        data = analyze_campaign_roi(since, until)
+        if data and data.get("meta_total_spend", 0) == 0:
+            try:
+                golden = analyze_golden_clients(since, until)
+                data["crm_campaign_quality"] = golden.get("campaign_quality", {})
+                data["crm_source_breakdown"] = golden.get("source_breakdown", {})
+            except:
+                pass
+        safe_send(MY_CHAT_ID, generate_response(user_text, data, "roi"))
+    elif show == "ltv":
+        data = analyze_ltv(since, until)
+        safe_send(MY_CHAT_ID, generate_response(user_text, data, "ltv"))
+    elif show == "funnel":
+        data = analyze_funnel(since, until)
+        safe_send(MY_CHAT_ID, generate_response(user_text, data, "funnel"))
+    elif show == "golden":
+        safe_send(MY_CHAT_ID, "⭐ Ищу золотых клиентов и определяю источники...\n⏳")
+        data = analyze_golden_clients(since, until)
+        safe_send(MY_CHAT_ID, generate_response(user_text, data, "golden"))
+    elif show == "full_report":
+        safe_send(MY_CHAT_ID, "📊 Собираю полный отчёт...\n⏳")
+        data = full_analytics(since, until)
+        safe_send(MY_CHAT_ID, generate_response(user_text, data, "full_report"))
+    elif show in ("budget_advice", "dead_campaigns"):
+        safe_send(MY_CHAT_ID, "💰 Анализирую данные...\n⏳")
+        golden_data = analyze_golden_clients(since, until)
+        meta_data = {}
+        try:
+            roi = analyze_campaign_roi(since, until)
+            if roi and "error" not in roi:
+                meta_data = roi
+        except:
+            pass
+        combined = {"crm_analysis": golden_data, "meta_analysis": meta_data}
+        safe_send(MY_CHAT_ID, generate_response(user_text, combined, show))
+    elif show == "best_source":
+        safe_send(MY_CHAT_ID, "🔍 Сравниваю источники клиентов...\n⏳")
+        data = analyze_golden_clients(since, until)
+        safe_send(MY_CHAT_ID, generate_response(user_text, data, "best_source"))
+    elif show == "branch_compare":
+        safe_send(MY_CHAT_ID, "🏢 Сравниваю филиалы...\n⏳")
+        data = analyze_crm_data(since, until)
+        data.pop("_deal_details", None)
+        safe_send(MY_CHAT_ID, generate_response(user_text, data, "branch_compare"))
+    elif show == "dashboard":
+        safe_send(MY_CHAT_ID, "📊 Генерирую дашборд с динамикой...\n⏳ 20-30 секунд")
+        data = full_analytics(since, until)
+        safe_send(MY_CHAT_ID, "⏳ Загружаю данные за предыдущий период...")
+        prev_data = fetch_comparison_data(since, until)
+        period_names = {
+            "today": "Сегодня", "yesterday": "Вчера", "week": "Неделя",
+            "month": "Месяц", "3months": "3 месяца", "6months": "Полгода",
+            "year": "Год", "all": "Всё время"
+        }
+        plabel = period_names.get(period, f"{since} — {until}") if period else f"{since} — {until}"
+        png_path = generate_dashboard_png(data, plabel, prev_data=prev_data)
+        with open(png_path, 'rb') as photo:
+            bot.send_photo(MY_CHAT_ID, photo, caption=f"📊 iStudio Dashboard · {plabel}")
+        os.unlink(png_path)
+        summary = generate_response(user_text, data, "full_report")
+        safe_send(MY_CHAT_ID, summary)
+    else:
+        data = fetch_spend_data(period or "today", since, until)
+        safe_send(MY_CHAT_ID, generate_response(user_text, data, "spend"))
+
 @bot.message_handler(content_types=["voice", "video_note"])
 def handle_voice(message):
     if message.chat.id != MY_CHAT_ID:
@@ -1942,7 +2202,6 @@ def handle_voice(message):
 
     safe_send(MY_CHAT_ID, f"✅ Понял: «{text}»")
 
-    # Process as regular text
     intent = detect_intent(text)
     print(f"Voice intent: {intent}")
 
@@ -1961,69 +2220,11 @@ def handle_voice(message):
         since, until = get_date_range(period)
 
     try:
-        if show == "all_campaigns":
-            data = fetch_all_campaigns_list()
-            safe_send(MY_CHAT_ID, generate_response(text, data))
-        elif show == "crm":
-            data = analyze_crm_data(since, until)
-            data.pop("_deal_details", None)
-            safe_send(MY_CHAT_ID, generate_response(text, data, "crm"))
-        elif show == "roi":
-            data = analyze_campaign_roi(since, until)
-            safe_send(MY_CHAT_ID, generate_response(text, data, "roi"))
-        elif show == "ltv":
-            data = analyze_ltv(since, until)
-            safe_send(MY_CHAT_ID, generate_response(text, data, "ltv"))
-        elif show == "funnel":
-            data = analyze_funnel(since, until)
-            safe_send(MY_CHAT_ID, generate_response(text, data, "funnel"))
-        elif show == "golden":
-            safe_send(MY_CHAT_ID, "⭐ Ищу золотых клиентов...\n⏳")
-            data = analyze_golden_clients(since, until)
-            safe_send(MY_CHAT_ID, generate_response(text, data, "golden"))
-        elif show == "full_report":
-            safe_send(MY_CHAT_ID, "📊 Собираю полный отчёт...\n⏳")
-            data = full_analytics(since, until)
-            safe_send(MY_CHAT_ID, generate_response(text, data, "full_report"))
-        elif show in ("budget_advice", "dead_campaigns"):
-            golden_data = analyze_golden_clients(since, until)
-            meta_data = {}
-            try:
-                roi = analyze_campaign_roi(since, until)
-                if roi and "error" not in roi:
-                    meta_data = roi
-            except:
-                pass
-            combined = {"crm_analysis": golden_data, "meta_analysis": meta_data}
-            safe_send(MY_CHAT_ID, generate_response(text, combined, show))
-        elif show == "best_source":
-            data = analyze_golden_clients(since, until)
-            safe_send(MY_CHAT_ID, generate_response(text, data, "best_source"))
-        elif show == "branch_compare":
-            data = analyze_crm_data(since, until)
-            data.pop("_deal_details", None)
-            safe_send(MY_CHAT_ID, generate_response(text, data, "branch_compare"))           
-        elif show == "dashboard":
-            safe_send(MY_CHAT_ID, "📊 Генерирую дашборд...\n⏳")
-            data = full_analytics(since, until)
-            period_names = {"today": "Сегодня", "yesterday": "Вчера", "week": "Неделя", "month": "Месяц", "3months": "3 месяца", "6months": "Полгода", "year": "Год", "all": "Всё время"}
-            plabel = period_names.get(period, f"{since} — {until}")
-            png_path = generate_dashboard_png(data, plabel)
-            with open(png_path, 'rb') as photo:
-                bot.send_photo(MY_CHAT_ID, photo, caption=f"📊 iStudio Dashboard · {plabel}")
-            os.unlink(png_path)
-            summary = generate_response(user_text, data, "full_report")
-            safe_send(MY_CHAT_ID, summary)
-        else:
-            data = fetch_spend_data(period, since, until)
-            safe_send(MY_CHAT_ID, generate_response(text, data, "spend"))
+        _handle_show(show, since, until, text, period)
     except Exception as e:
         print(f"Voice handler error: {e}")
         safe_send(MY_CHAT_ID, f"❌ Ошибка: {str(e)[:200]}")
 
-# ============================================================
-# FREE-TEXT HANDLER
-# ============================================================
 @bot.message_handler(func=lambda m: m.chat.id == MY_CHAT_ID)
 def handle_text(message):
     user_text = message.text.strip()
@@ -2035,7 +2236,6 @@ def handle_text(message):
     period = intent.get("period", "today")
     custom = intent.get("custom_dates")
 
-    # Determine date range
     since, until = None, None
     if custom and isinstance(custom, dict):
         since = custom.get("since")
@@ -2047,86 +2247,7 @@ def handle_text(message):
         since, until = get_date_range(period)
 
     try:
-        if show == "all_campaigns":
-            data = fetch_all_campaigns_list()
-            safe_send(MY_CHAT_ID, generate_response(user_text, data))
-        elif show == "crm":
-            data = analyze_crm_data(since, until)
-            data.pop("_deal_details", None)
-            safe_send(MY_CHAT_ID, generate_response(user_text, data, "crm"))
-        elif show == "roi":
-            data = analyze_campaign_roi(since, until)
-            # If Meta returned $0 spend, enrich with CRM campaign quality data
-            if data and data.get("meta_total_spend", 0) == 0:
-                try:
-                    golden = analyze_golden_clients(since, until)
-                    data["crm_campaign_quality"] = golden.get("campaign_quality", {})
-                    data["crm_source_breakdown"] = golden.get("source_breakdown", {})
-                except:
-                    pass
-            safe_send(MY_CHAT_ID, generate_response(user_text, data, "roi"))
-        elif show == "ltv":
-            data = analyze_ltv(since, until)
-            safe_send(MY_CHAT_ID, generate_response(user_text, data, "ltv"))
-        elif show == "funnel":
-            data = analyze_funnel(since, until)
-            safe_send(MY_CHAT_ID, generate_response(user_text, data, "funnel"))
-        elif show == "golden":
-            safe_send(MY_CHAT_ID, "⭐ Ищу золотых клиентов и определяю источники...\n⏳")
-            data = analyze_golden_clients(since, until)
-            safe_send(MY_CHAT_ID, generate_response(user_text, data, "golden"))
-        elif show == "full_report":
-            safe_send(MY_CHAT_ID, "📊 Собираю полный отчёт...\n⏳")
-            data = full_analytics(since, until)
-            safe_send(MY_CHAT_ID, generate_response(user_text, data, "full_report"))
-        elif show == "budget_advice":
-            safe_send(MY_CHAT_ID, "💰 Анализирую данные для бюджета...\n⏳")
-            # Use golden clients (CRM data with campaign tags) + Meta if available
-            golden_data = analyze_golden_clients(since, until)
-            meta_data = {}
-            try:
-                roi = analyze_campaign_roi(since, until)
-                if roi and "error" not in roi:
-                    meta_data = roi
-            except:
-                pass
-            combined = {"crm_analysis": golden_data, "meta_analysis": meta_data}
-            safe_send(MY_CHAT_ID, generate_response(user_text, combined, "budget_advice"))
-        elif show == "dead_campaigns":
-            safe_send(MY_CHAT_ID, "💀 Ищу неэффективные кампании...\n⏳")
-            golden_data = analyze_golden_clients(since, until)
-            meta_data = {}
-            try:
-                roi = analyze_campaign_roi(since, until)
-                if roi and "error" not in roi:
-                    meta_data = roi
-            except:
-                pass
-            combined = {"crm_analysis": golden_data, "meta_analysis": meta_data}
-            safe_send(MY_CHAT_ID, generate_response(user_text, combined, "dead_campaigns"))
-        elif show == "best_source":
-            safe_send(MY_CHAT_ID, "🔍 Сравниваю источники клиентов...\n⏳")
-            data = analyze_golden_clients(since, until)
-            safe_send(MY_CHAT_ID, generate_response(user_text, data, "best_source"))
-        elif show == "branch_compare":
-            safe_send(MY_CHAT_ID, "🏢 Сравниваю филиалы...\n⏳")
-            data = analyze_crm_data(since, until)
-            data.pop("_deal_details", None)
-            safe_send(MY_CHAT_ID, generate_response(user_text, data, "branch_compare"))            
-        elif show == "dashboard":
-            safe_send(MY_CHAT_ID, "📊 Генерирую дашборд...\n⏳")
-            data = full_analytics(since, until)
-            period_names = {"today": "Сегодня", "yesterday": "Вчера", "week": "Неделя", "month": "Месяц", "3months": "3 месяца", "6months": "Полгода", "year": "Год", "all": "Всё время"}
-            plabel = period_names.get(period, f"{since} — {until}")
-            png_path = generate_dashboard_png(data, plabel)
-            with open(png_path, 'rb') as photo:
-                bot.send_photo(MY_CHAT_ID, photo, caption=f"📊 iStudio Dashboard · {plabel}")
-            os.unlink(png_path)
-            summary = generate_response(user_text, data, "full_report")
-            safe_send(MY_CHAT_ID, summary)
-        else:
-            data = fetch_spend_data(period, since, until)
-            safe_send(MY_CHAT_ID, generate_response(user_text, data, "spend"))
+        _handle_show(show, since, until, user_text, period)
     except Exception as e:
         print(f"Handler error: {e}")
         safe_send(MY_CHAT_ID, f"❌ Ошибка при обработке: {str(e)[:200]}")
@@ -2153,7 +2274,6 @@ if __name__ == "__main__":
     print(f"📊 Meta: {'✅ configured' if META_ACCESS_TOKEN else '❌ no token'}")
     print(f"🎙 Voice: {'✅ OpenAI Whisper' if OPENAI_API_KEY else '❌ no key'}")
 
-    # Clear any stuck webhooks/polling
     bot.delete_webhook(drop_pending_updates=True)
     time.sleep(1)
 
