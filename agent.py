@@ -1689,17 +1689,17 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 .card{{background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:18px;padding:22px;position:relative;overflow:hidden;backdrop-filter:blur(20px);box-shadow:0 4px 24px rgba(0,0,0,.4),0 1px 0 rgba(255,255,255,.04)inset,0 -2px 8px rgba(0,0,0,.2)inset;transform:perspective(800px)rotateX(3deg)}}
 .card::before{{content:'';position:absolute;top:0;left:0;right:0;height:50%;background:linear-gradient(180deg,rgba(255,255,255,.04),transparent);border-radius:18px 18px 0 0;pointer-events:none}}
 .cl{{font-size:20px;color:#e0e0f0;font-weight:700;text-transform:uppercase;letter-spacing:2.5px;margin-bottom:10px}}
-.cv-row{{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}}
-.cv{{font-family:'Unbounded',sans-serif;font-size:46px;font-weight:800;line-height:1;text-shadow:0 2px 8px rgba(0,0,0,.3)}}
-/* Delta badges — inline right of value */
-.db-delta{{display:inline-flex;align-items:center;font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;padding:3px 9px;border-radius:16px;background:rgba(255,255,255,.07);letter-spacing:0.3px;white-space:nowrap}}
-.db-flat{{display:inline-flex;align-items:center;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;padding:3px 9px;border-radius:16px;background:rgba(255,255,255,.04);color:#4a4a5a;white-space:nowrap}}
+.cv-row{{display:flex;align-items:center;gap:12px;flex-wrap:nowrap}}
+.cv{{font-family:'Unbounded',sans-serif;font-size:40px;font-weight:800;line-height:1;text-shadow:0 2px 8px rgba(0,0,0,.3)}}
+/* Delta badges — inline right of value, 2x size */
+.db-delta{{display:inline-flex;align-items:center;font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;padding:5px 14px;border-radius:20px;background:rgba(255,255,255,.09);letter-spacing:0.3px;white-space:nowrap}}
+.db-flat{{display:inline-flex;align-items:center;font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:600;padding:5px 14px;border-radius:20px;background:rgba(255,255,255,.05);color:#4a4a5a;white-space:nowrap}}
 .sec{{font-family:'Unbounded',sans-serif;font-size:20px;font-weight:700;color:#e8e8f0;letter-spacing:4px;text-transform:uppercase;margin:32px 0 16px;display:flex;align-items:center;justify-content:center;gap:12px}}
 .fcard{{background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:18px;padding:28px 24px;margin-bottom:14px;backdrop-filter:blur(20px);box-shadow:0 8px 32px rgba(0,0,0,.5),0 1px 0 rgba(255,255,255,.04)inset;overflow:hidden}}
 .fstats{{display:flex;gap:24px;justify-content:center;margin-bottom:16px;flex-wrap:wrap}}
 .fstat{{text-align:center;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);border-radius:12px;padding:12px 20px}}
 .fstat-l{{font-size:11px;color:#6b6b80;text-transform:uppercase;letter-spacing:2px;margin-bottom:4px}}
-.fstat-v{{font-family:'Unbounded',sans-serif;font-size:22px;font-weight:700}}
+.fstat-v{{font-family:'Unbounded',sans-serif;font-size:22px;font-weight:700;display:flex;align-items:center;gap:10px}}
 .fn{{display:flex;flex-direction:column;align-items:center;gap:2px;max-width:620px;margin:0 auto}}
 .fs{{display:flex;align-items:center;width:100%}}
 .fw{{flex:1;display:flex;justify-content:center}}
@@ -1723,7 +1723,7 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 .lost-s{{font-size:18px;font-weight:600;color:#6b6b80;margin-top:8px}}
 .pill{{flex:1;background:rgba(18,18,28,.85);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:16px;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.3)}}
 .pill-l{{font-size:22px;color:#e0e0f0;font-weight:800;color:#6b6b80;text-transform:uppercase;letter-spacing:2.5px;margin-bottom:8px}}
-.pill-v{{font-family:'Unbounded',sans-serif;font-size:50px;font-weight:900;font-weight:700}}
+.pill-v{{font-family:'Unbounded',sans-serif;font-size:42px;font-weight:700}}
 .pill-v.gold{{color:#f0c040}}.pill-v.green{{color:#22c55e}}.pill-v.red{{color:#ef4444}}.pill-v.blue{{color:#3b82f6}}
 .footer{{text-align:center;padding:24px 0 8px;font-size:9px;color:#3a3a50;letter-spacing:2px;text-transform:uppercase}}
 </style></head><body><div class="gr"></div><div class="db">
