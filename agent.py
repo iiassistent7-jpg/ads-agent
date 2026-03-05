@@ -417,49 +417,68 @@ def get_amocrm_contacts(contact_ids):
     return contacts
 
 def find_contact_by_phone(phone):
-    """Search amoCRM contact by phone number. Returns contact dict or None."""
+    """Search amoCRM contact by phone. Returns full contact dict with all custom fields."""
     import re
     digits = re.sub(r"[^\d]", "", phone.strip())
 
-    # Build all variants to try
     variants = set()
-    variants.add(digits)                          # as-is digits only
-
+    variants.add(digits)
     if digits.startswith("972") and len(digits) == 12:
-        local = "0" + digits[3:]                  # 972541234567 → 0541234567
-        variants.add(local)
-        variants.add("+" + digits)                # +972541234567
-        variants.add(digits[3:])                  # 541234567
+        variants.add("0" + digits[3:])
+        variants.add("+" + digits)
+        variants.add(digits[3:])
     elif digits.startswith("0") and len(digits) == 10:
-        intl = "972" + digits[1:]                 # 0541234567 → 972541234567
+        intl = "972" + digits[1:]
         variants.add("+" + intl)
         variants.add(intl)
-        variants.add(digits[1:])                  # 541234567
-    elif len(digits) == 9:                        # already without 0 or country code
+        variants.add(digits[1:])
+    elif len(digits) == 9:
         variants.add("0" + digits)
         variants.add("972" + digits)
         variants.add("+972" + digits)
 
     for q in variants:
-        data = amocrm_request(f"contacts?query={q}&with=leads")
+        data = amocrm_request(f"contacts?query={q}&with=leads,customers")
         if data:
             contacts = (data.get("_embedded") or {}).get("contacts") or []
             if contacts:
                 c = contacts[0]
-                phone_val = ""
+
+                # Extract ALL phone numbers
+                phones = []
+                email = ""
+                custom_fields = {}
                 for cf in (c.get("custom_fields_values") or []):
-                    if cf.get("field_code") == "PHONE":
-                        vals = cf.get("values") or []
-                        if vals: phone_val = vals[0].get("value", "")
+                    code = cf.get("field_code", "")
+                    fname = cf.get("field_name", "")
+                    vals = cf.get("values") or []
+                    if not vals: continue
+                    if code == "PHONE":
+                        for v in vals:
+                            p = v.get("value","")
+                            if p: phones.append(p)
+                    elif code == "EMAIL":
+                        email = vals[0].get("value","")
+                    else:
+                        # Custom fields: visit count, status, gender, etc.
+                        val = vals[0].get("value")
+                        key = fname or code
+                        if key and val is not None:
+                            custom_fields[key] = val
+
                 lead_ids = [
                     lnk["id"] for lnk in
                     ((c.get("_embedded") or {}).get("leads") or [])
                 ]
+
                 return {
                     "id": c["id"],
                     "name": c.get("name", "Без имени"),
-                    "phone": phone_val or phone,
+                    "phone": phones[0] if phones else phone,
+                    "all_phones": phones,
+                    "email": email,
                     "lead_ids": lead_ids,
+                    "custom_fields": custom_fields,  # Кол-во процедур, статус, пол и тд
                 }
         time.sleep(0.15)
     return None
@@ -608,7 +627,118 @@ def get_contact_notes(contact_id):
         "tags": tags,
     }
 
-def get_deal_full(deal_id):
+def get_contact_conversations(contact_id, lead_ids=None):
+    """
+    Fetch chat messages from amoCRM via all possible Wazzup/integration endpoints.
+    Wazzup stores messages as notes with specific note_types OR via /talks API.
+    """
+    from datetime import datetime as _dt
+    messages = []
+
+    # 1. Try /talks API (amoCRM native chats, newer API)
+    talks_data = amocrm_request(f"talks?contact_id={contact_id}&limit=100")
+    if talks_data:
+        for talk in (talks_data.get("_embedded") or {}).get("talks") or []:
+            talk_id = talk.get("id")
+            # Fetch messages within each talk
+            msgs_data = amocrm_request(f"talks/{talk_id}/messages?limit=200")
+            if msgs_data:
+                for m in (msgs_data.get("_embedded") or {}).get("messages") or []:
+                    created = m.get("created_at", 0)
+                    text = m.get("text") or m.get("content") or ""
+                    author_type = m.get("author", {}).get("type", "")
+                    direction = "👤 Клиент" if author_type == "contact" else "💼 Менеджер"
+                    channel = talk.get("channel_type", "chat")
+                    if text:
+                        messages.append({
+                            "date": _dt.fromtimestamp(created).strftime("%d.%m.%Y %H:%M") if created else "",
+                            "direction": direction,
+                            "channel": channel,
+                            "text": text[:600],
+                            "ts": created,
+                        })
+
+    # 2. Try contact notes — Wazzup often stores as note_type containing "wazzup"/"whatsapp"/"instagram"
+    notes_data = amocrm_request(f"contacts/{contact_id}/notes?limit=500")
+    if notes_data:
+        for n in (notes_data.get("_embedded") or {}).get("notes") or []:
+            nt = n.get("note_type", "")
+            params = n.get("params") or {}
+            created = n.get("created_at", 0)
+            # Message content in various fields
+            text = (params.get("text") or params.get("message") or
+                    params.get("body") or params.get("content") or "")
+            income = params.get("income")
+            direction = "👤 Клиент" if income is True else ("💼 Менеджер" if income is False else "")
+
+            # Channel detection
+            nt_low = nt.lower()
+            if "whatsapp" in nt_low or "wazzup" in nt_low:
+                channel = "WhatsApp"
+            elif "instagram" in nt_low:
+                channel = "Instagram"
+            elif "facebook" in nt_low or "messenger" in nt_low:
+                channel = "Facebook"
+            elif "telegram" in nt_low:
+                channel = "Telegram"
+            elif nt in ("common", "amocrm_bot"):
+                channel = "Заметка"
+            else:
+                channel = nt or "chat"
+
+            if text and created:
+                messages.append({
+                    "date": _dt.fromtimestamp(created).strftime("%d.%m.%Y %H:%M"),
+                    "direction": direction,
+                    "channel": channel,
+                    "text": text[:600],
+                    "ts": created,
+                })
+
+    # 3. Also check lead-level notes for each recent deal
+    if lead_ids:
+        for lid in lead_ids[:5]:  # only last 5 deals
+            ln_data = amocrm_request(f"leads/{lid}/notes?limit=100")
+            if ln_data:
+                for n in (ln_data.get("_embedded") or {}).get("notes") or []:
+                    nt = n.get("note_type", "")
+                    params = n.get("params") or {}
+                    created = n.get("created_at", 0)
+                    text = (params.get("text") or params.get("message") or
+                            params.get("body") or params.get("content") or "")
+                    income = params.get("income")
+                    direction = "👤 Клиент" if income is True else ("💼 Менеджер" if income is False else "")
+                    nt_low = nt.lower()
+                    if "whatsapp" in nt_low or "wazzup" in nt_low: channel = "WhatsApp"
+                    elif "instagram" in nt_low: channel = "Instagram"
+                    elif "facebook" in nt_low: channel = "Facebook"
+                    elif nt in ("common",): channel = "Заметка"
+                    else: channel = nt or "chat"
+                    if text and created:
+                        messages.append({
+                            "date": _dt.fromtimestamp(created).strftime("%d.%m.%Y %H:%M"),
+                            "direction": direction,
+                            "channel": channel,
+                            "text": text[:600],
+                            "ts": created,
+                        })
+
+    # Deduplicate by (ts, text) and sort chronologically
+    seen = set()
+    unique = []
+    for m in messages:
+        key = (m.get("ts"), m.get("text","")[:50])
+        if key not in seen:
+            seen.add(key)
+            unique.append(m)
+
+    unique.sort(key=lambda x: x.get("ts", 0))
+    for m in unique: m.pop("ts", None)
+
+    print(f"Conversations for contact {contact_id}: {len(unique)} messages total")
+    return unique
+
+
     """Fetch full deal details including custom fields."""
     data = amocrm_request(f"leads/{deal_id}?with=contacts,tags")
     if not data:
@@ -644,28 +774,54 @@ def analyze_client_by_phone(phone):
         return {"error": f"Контакт с номером {phone} не найден в amoCRM"}
 
     lead_ids = contact.get("lead_ids", [])
-    if not lead_ids:
-        return {"error": f"У контакта {contact['name']} ({phone}) нет сделок в amoCRM"}
 
-    # Fetch all deals with notes
-    deals_data = []
-    for lid in lead_ids[:10]:
-        deal = get_deal_full(lid)
-        if deal:
+    # Contact card fields — ground truth for visit count & status
+    card = contact.get("custom_fields", {})
+    card_visits    = card.get("Количество процедур") or card.get("Кол-во процедур") or card.get("Visits")
+    card_status    = card.get("Статус пациента") or card.get("Статус клиента") or card.get("Status")
+    card_gender    = card.get("Пол") or card.get("Gender")
+
+    # Fetch ALL deals (no limit) but cap notes fetching to last 20 for speed
+    all_deal_ids = lead_ids  # could be 50+
+    print(f"Client {contact['name']} has {len(all_deal_ids)} deals total")
+
+    # For stats: fetch summary of all deals (price + stage) without notes
+    deals_summary = []
+    for lid in all_deal_ids[:60]:   # cap at 60 for API sanity
+        d = get_deal_full(lid)
+        if d:
+            deals_summary.append(d)
+        time.sleep(0.15)
+
+    # For notes/analysis: fetch detailed notes only for last 15 deals
+    recent_ids = all_deal_ids[:15]
+    deals_detailed = []
+    for lid in recent_ids:
+        d = next((x for x in deals_summary if x["id"] == lid), get_deal_full(lid))
+        if d:
             notes = get_deal_notes(lid)
-            deal["notes"] = notes
-            deals_data.append(deal)
-        time.sleep(0.2)
+            d["notes"] = notes
+            deals_detailed.append(d)
 
-    # Also fetch notes attached directly to the contact (WhatsApp/Instagram DM)
-    contact_notes = get_contact_notes(contact["id"])
+    # Real totals from all deals
+    total_spent  = sum(d.get("price", 0) for d in deals_summary if d.get("price") and d.get("status_id") in (52041937, 70503946))
+    total_deals  = len(deals_summary)
+    won_deals    = sum(1 for d in deals_summary if d.get("status_id") in (52041937, 70503946))
+
+    # Contact-level conversations (WhatsApp/Instagram/Facebook via Wazzup)
+    contact_notes = get_contact_conversations(contact["id"], lead_ids=lead_ids[:5])
 
     return {
         "contact": contact,
-        "deals": deals_data,
+        "card_visits": card_visits,
+        "card_status": card_status,
+        "card_gender": card_gender,
+        "deals": deals_detailed,          # last 15 with notes
+        "all_deals_count": total_deals,
+        "won_deals_count": won_deals,
         "contact_notes": contact_notes,
-        "total_deals": len(deals_data),
-        "total_spent": sum(d.get("price", 0) for d in deals_data if d.get("price")),
+        "total_deals": total_deals,
+        "total_spent": total_spent,
     }
 
 def format_client_profile(data, stage_map=None):
@@ -675,6 +831,21 @@ def format_client_profile(data, stage_map=None):
 
     contact = data["contact"]
     deals = data["deals"]
+    card_visits = data.get("card_visits")
+    card_status = data.get("card_status")
+    card_gender = data.get("card_gender")
+    all_phones  = contact.get("all_phones", [contact.get("phone","")])
+
+    # Card-level extra info
+    card_info = ""
+    if card_visits: card_info += f"Процедур (из карточки): {card_visits}\n"
+    if card_status: card_info += f"Статус: {card_status}\n"
+    if card_gender: card_info += f"Пол: {card_gender}\n"
+    extra_cf = {k:v for k,v in contact.get("custom_fields",{}).items()
+                if k not in ("Количество процедур","Кол-во процедур","Visits",
+                             "Статус пациента","Статус клиента","Status","Пол","Gender")}
+    for k,v in extra_cf.items():
+        card_info += f"{k}: {v}\n"
 
     deals_text = ""
     for i, d in enumerate(deals, 1):
@@ -705,17 +876,31 @@ def format_client_profile(data, stage_map=None):
     contact_notes = data.get("contact_notes", [])
     contact_chat = ""
     if contact_notes:
-        contact_chat = "\nПЕРЕПИСКА (привязана к контакту — WhatsApp/Instagram):\n"
+        # Group by channel for summary
+        by_channel = {}
         for n in contact_notes:
+            ch = n.get("channel", "chat")
+            by_channel[ch] = by_channel.get(ch, 0) + 1
+
+        ch_summary = ", ".join(f"{ch}: {cnt}" for ch, cnt in by_channel.items())
+        contact_chat = f"\nПЕРЕПИСКА ({ch_summary}):\n"
+
+        # Show last 40 messages max to keep prompt manageable
+        for n in contact_notes[-40:]:
             direction = f" [{n['direction']}]" if n.get("direction") else ""
-            contact_chat += f"  [{n['date']}] {n['label']}{direction}: {n['text']}\n"
+            channel = f"[{n['channel']}]" if n.get("channel") else ""
+            contact_chat += f"  {n['date']} {channel}{direction}: {n['text']}\n"
 
     prompt = f"""ДАННЫЕ КЛИЕНТА iStudio:
 Имя: {contact['name']}
-Телефон: {contact['phone']}
-Всего сделок в CRM: {data['total_deals']}
-Общая сумма выполненных процедур: ₪{data['total_spent']}
+Телефоны: {', '.join(all_phones)}
+Всего сделок в CRM: {data['all_deals_count']} (из них выполнено: {data['won_deals_count']})
+Общая выручка (только выполненные): ₪{data['total_spent']}
+
+ДАННЫЕ ИЗ КАРТОЧКИ КОНТАКТА:
+{card_info or '— не заполнено'}
 {contact_chat}
+ПОСЛЕДНИЕ СДЕЛКИ (последние {len(deals)} из {data['all_deals_count']}):
 {deals_text}
 
 ---
@@ -741,19 +926,21 @@ def format_client_profile(data, stage_map=None):
     try:
         response = call_claude(ANALYST_PROMPT, prompt, max_tokens=2000)
         # Count messages
-        total_msgs = sum(len(d.get("notes", [])) for d in deals)
-        wa_msgs = sum(1 for d in deals for n in d.get("notes", []) if "whatsapp" in n.get("type","").lower() or "wazzup" in n.get("type","").lower())
-        ig_msgs = sum(1 for d in deals for n in d.get("notes", []) if "instagram" in n.get("type","").lower())
+        total_msgs = len(contact_notes)
+        by_channel = {}
+        for n in contact_notes:
+            ch = n.get("channel", "?")
+            by_channel[ch] = by_channel.get(ch, 0) + 1
+        ch_str = ", ".join(f"{ch}: {cnt}" for ch, cnt in by_channel.items()) if by_channel else "0"
 
-        channels = []
-        if wa_msgs: channels.append(f"WhatsApp: {wa_msgs}")
-        if ig_msgs: channels.append(f"Instagram: {ig_msgs}")
-        ch_str = " | ".join(channels) if channels else f"заметок: {total_msgs}"
-
+        visits_str = f" | Процедур: {card_visits}" if card_visits else f" | Выполнено: {data['won_deals_count']}"
+        status_str = f" | {card_status}" if card_status else ""
+        phones_str = " / ".join(all_phones[:2])
         header = (
-            f"👤 {contact['name']}\n"
-            f"📱 {contact['phone']}\n"
-            f"💰 Потрачено: ₪{data['total_spent']} | Сделок: {data['total_deals']}\n"
+            f"👤 {contact['name']}{status_str}\n"
+            f"📱 {phones_str}\n"
+            f"💰 Выручка: ₪{data['total_spent']}{visits_str}\n"
+            f"📋 Всего сделок: {data['all_deals_count']}\n"
             f"💬 Сообщений: {ch_str}\n"
             f"{'—'*30}\n\n"
         )
