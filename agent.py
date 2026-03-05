@@ -625,8 +625,6 @@ def analyze_crm_data(since=None, until=None):
         else:
             by_campaign_tag[tag_key]["avg_deal"] = 0
 
-    print(f"REVENUE DEBUG: total_deals={total_deals}, won={len(won_deals)}, total_revenue={total_revenue}, filtered_out={filtered_out}")
-
     PIPELINE_WORKING = 5896168
     PIPELINE_PERMANENT = 8703286
 
@@ -659,6 +657,9 @@ def analyze_crm_data(since=None, until=None):
                 permanent_funnel["revenue"] += price
             elif stage_id in closed_lost_ids:
                 permanent_funnel["lost"] += 1
+
+    sorted_campaigns = sorted(by_campaign_tag.items(), key=lambda x: x[1]["revenue"], reverse=True)
+    print(f"REVENUE DEBUG: total_deals={total_deals}, won={len(won_deals)}, total_revenue={total_revenue}, filtered_out={filtered_out}")
 
     return {
         "total_deals": total_deals,
