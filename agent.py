@@ -589,8 +589,9 @@ def analyze_crm_data(since=None, until=None):
         if campaign_info:
             tag_key = campaign_info["raw"]
             if tag_key not in by_campaign_tag:
-                by_campaign_tag[tag_key] = {"deals": 0, "revenue": 0, "with_revenue": 0, "won": 0, "lost": 0, "prices": []}
+                by_campaign_tag[tag_key] = {"deals": 0, "revenue": 0, "with_revenue": 0, "won": 0, "lost": 0, "prices": [], "stages": {}}
             by_campaign_tag[tag_key]["deals"] += 1
+            by_campaign_tag[tag_key]["stages"][stage_name] = by_campaign_tag[tag_key]["stages"].get(stage_name, 0) + 1
             if stage_id in closed_won_ids:
                 by_campaign_tag[tag_key]["won"] += 1
                 by_campaign_tag[tag_key]["revenue"] += price
@@ -681,6 +682,132 @@ def analyze_crm_data(since=None, until=None):
         "period": {"since": since, "until": until} if since else None,
         "_deal_details": all_deal_details,
     }
+
+def analyze_campaign_funnel(campaign_tag, since=None, until=None):
+    """Detailed stage-by-stage funnel for a specific campaign tag."""
+    crm = analyze_crm_data(since, until)
+    if "error" in crm:
+        return crm
+
+    deal_details = crm.get("_deal_details", [])
+
+    # iStudio funnel stage order (working pipeline)
+    STAGE_ORDER = [
+        "Неразобранное",
+        "Заявка взята в работу",
+        "Связаться с клиентом повторно",
+        "Записан на пробную процедуру",
+        "Запись подтверждена",
+        "Пробная процедура выполнена",
+        "Закрыто и не реализовано",
+    ]
+
+    # Find matching deals (fuzzy match on campaign_tag)
+    tag_lower = campaign_tag.lower().strip()
+    matched = [
+        d for d in deal_details
+        if d.get("campaign_tag") and tag_lower in d["campaign_tag"].lower()
+    ]
+
+    if not matched:
+        # Try matching by fb_tag
+        matched = [
+            d for d in deal_details
+            if d.get("fb_tag") and tag_lower in d["fb_tag"].lower()
+        ]
+
+    if not matched:
+        return {"error": f"Кампания '{campaign_tag}' не найдена в данных за период"}
+
+    # Count by stage
+    stage_counts = {}
+    for d in matched:
+        s = d.get("stage", "Неизвестно")
+        stage_counts[s] = stage_counts.get(s, 0) + 1
+
+    total = len(matched)
+    won = sum(1 for d in matched if d.get("is_won"))
+    lost = sum(1 for d in matched if d.get("is_lost"))
+    in_progress = total - won - lost
+    revenue = sum(d.get("price", 0) for d in matched if d.get("is_won"))
+
+    # Sort stages in funnel order, then unknowns at end
+    def stage_sort_key(s):
+        try:
+            return STAGE_ORDER.index(s)
+        except ValueError:
+            return 99
+
+    sorted_stages = sorted(stage_counts.items(), key=lambda x: stage_sort_key(x[0]))
+
+    return {
+        "campaign_tag": campaign_tag,
+        "total": total,
+        "won": won,
+        "lost": lost,
+        "in_progress": in_progress,
+        "revenue": revenue,
+        "conversion": round(won / total * 100, 1) if total > 0 else 0,
+        "avg_deal": round(revenue / won, 0) if won > 0 else 0,
+        "stages": sorted_stages,
+        "period": {"since": since, "until": until},
+    }
+
+def format_campaign_funnel(data):
+    """Format campaign funnel as readable Telegram text."""
+    if "error" in data:
+        return f"❌ {data['error']}"
+
+    tag = data["campaign_tag"]
+    total = data["total"]
+    won = data["won"]
+    lost = data["lost"]
+    in_prog = data["in_progress"]
+    revenue = data["revenue"]
+    conv = data["conversion"]
+
+    lines = [
+        f"📊 Воронка кампании: {tag}",
+        f"Период: {data['period']['since']} — {data['period']['until']}",
+        "",
+        f"Всего лидов: {total}",
+        f"✅ Дошли до процедуры: {won} ({conv}%)",
+        f"❌ Отказались: {lost} ({round(lost/total*100,1) if total else 0}%)",
+        f"⏳ В работе (не закрыты): {in_prog} ({round(in_prog/total*100,1) if total else 0}%)",
+        f"💰 Выручка: ₪{revenue:,.0f}",
+        "",
+        "─── Где сейчас каждый лид ───",
+    ]
+
+    for stage, count in data["stages"]:
+        pct = round(count / total * 100, 1) if total else 0
+        bar = "█" * min(count, 20)
+        # Emoji per stage type
+        if "выполнен" in stage.lower():
+            emoji = "✅"
+        elif "не реализовано" in stage.lower() or "закрыто" in stage.lower():
+            emoji = "❌"
+        elif "записан" in stage.lower() or "подтвержден" in stage.lower():
+            emoji = "📅"
+        elif "работу" in stage.lower() or "неразобр" in stage.lower():
+            emoji = "🔄"
+        elif "повторно" in stage.lower():
+            emoji = "📞"
+        else:
+            emoji = "•"
+        lines.append(f"{emoji} {stage}: {count} ({pct}%)")
+
+    # Highlight stuck leads
+    stuck = [(s, c) for s, c in data["stages"]
+             if "работу" in s.lower() or "повторно" in s.lower() or "неразобр" in s.lower()]
+    if stuck:
+        stuck_total = sum(c for _, c in stuck)
+        lines += [
+            "",
+            f"⚠️ Зависших лидов: {stuck_total} — нужна обработка!",
+        ]
+
+    return "\n".join(lines)
 
 def analyze_golden_clients(since=None, until=None):
     crm = analyze_crm_data(since, until)
@@ -1217,7 +1344,8 @@ INTENT_PROMPT = """Парсер запросов рекламного/CRM бот
 {"period": "month", "show": "spend", "custom_dates": null}
 
 period: today | yesterday | week | month | 3months | 6months | year | all | custom
-show: spend | all_campaigns | crm | roi | ltv | funnel | golden | full_report | budget_advice | dead_campaigns | best_source | branch_compare | dashboard
+show: spend | all_campaigns | crm | roi | ltv | funnel | golden | full_report | budget_advice | dead_campaigns | best_source | branch_compare | dashboard | campaign_funnel
+campaign_tag: (только для campaign_funnel) название кампании или fb-тег, например "Карбон ИВР" или "fb1428525824956091"
 custom_dates: null или {"since": "YYYY-MM-DD", "until": "YYYY-MM-DD"} — ОБЯЗАТЕЛЬНО вычисли даты если указан конкретный период
 
 ПРАВИЛА ДЛЯ ПЕРИОДОВ:
@@ -1243,6 +1371,7 @@ custom_dates: null или {"since": "YYYY-MM-DD", "until": "YYYY-MM-DD"} — О�
 CRM и продажи:
 - "crm", "срм", "клиенты", "сделки", "амо", "продажи" → crm
 - "воронка", "конверсия", "потери", "где теряем", "куда уходят" → funnel
+- "воронка по [кампании]", "где лиды с [тег]", "куда делись лиды карбон", "путь лидов", "где зависли лиды" → campaign_funnel + извлеки название кампании в поле "campaign_tag"
 
 Окупаемость:
 - "roi", "рои", "окупаемость", "что окупается", "что работает", "что приносит деньги" → roi
@@ -1925,6 +2054,210 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
     return png_path
 
 # ============================================================
+# CAMPAIGN DASHBOARD
+# ============================================================
+def generate_campaign_dashboard_png(campaign_data, meta_data, period_label, prev_campaign_data=None):
+    """Generate a per-campaign funnel + meta stats dashboard as PNG."""
+    from datetime import datetime as _dt
+
+    tag       = campaign_data.get("campaign_tag", "Кампания")
+    total     = campaign_data.get("total", 0)
+    won       = campaign_data.get("won", 0)
+    lost      = campaign_data.get("lost", 0)
+    in_prog   = campaign_data.get("in_progress", 0)
+    revenue   = campaign_data.get("revenue", 0)
+    conv      = campaign_data.get("conversion", 0)
+    avg_deal  = campaign_data.get("avg_deal", 0)
+    stages    = campaign_data.get("stages", [])
+    date_str  = _dt.now().strftime("%d.%m.%Y %H:%M")
+
+    # Meta stats for this campaign
+    spend     = meta_data.get("spend", 0)
+    leads     = meta_data.get("leads", 0)
+    cpl       = round(spend / leads, 2) if leads > 0 else 0
+    cpl_str   = f"${cpl:.2f}" if cpl > 0 else "—"
+    romi      = round((revenue - spend * 3.6) / (spend * 3.6) * 100, 0) if spend > 0 else 0
+    romi_col  = "#22c55e" if romi >= 0 else "#ef4444"
+
+    # Delta badges vs prev period
+    p = prev_campaign_data or {}
+    def d_badge(cur, prv, inverse=False):
+        if not prv or prv == 0 or cur is None: return ""
+        try:
+            pct = (cur - prv) / abs(prv) * 100
+        except: return ""
+        if abs(pct) < 0.5: return '<span class="db-flat">→ 0%</span>'
+        up = pct > 0
+        color = ("#ef4444" if up else "#22c55e") if inverse else ("#22c55e" if up else "#ef4444")
+        arrow = "▲" if up else "▼"
+        return f'<span class="db-delta" style="color:{color}">{arrow} {abs(pct):.1f}%</span>'
+
+    d_total   = d_badge(total,   p.get("total"))
+    d_won     = d_badge(won,     p.get("won"))
+    d_lost    = d_badge(lost,    p.get("lost"), inverse=True)
+    d_conv    = d_badge(conv,    p.get("conversion"))
+    d_rev     = d_badge(revenue, p.get("revenue"))
+    d_spend   = d_badge(spend,   p.get("spend"), inverse=True)
+    d_leads   = d_badge(leads,   p.get("leads"))
+    d_cpl     = d_badge(cpl,     p.get("cpl"), inverse=True)
+
+    prev_label = ""
+    if p.get("since") and p.get("until"):
+        prev_label = f'<div class="vs-label">VS {p["since"]} — {p["until"]}</div>'
+
+    # Build stages funnel bars
+    STAGE_ORDER = [
+        "Неразобранное", "Заявка взята в работу", "Связаться с клиентом повторно",
+        "Записан на пробную процедуру", "Запись подтверждена",
+        "Пробная процедура выполнена", "Закрыто и не реализовано",
+    ]
+    STAGE_COLORS = {
+        "Пробная процедура выполнена": ("#22c55e", "#4ade80"),
+        "Закрыто и не реализовано":   ("#ef4444", "#f87171"),
+        "Записан на пробную процедуру": ("#3b82f6", "#60a5fa"),
+        "Запись подтверждена":          ("#3b82f6", "#93c5fd"),
+        "Заявка взята в работу":        ("#f59e0b", "#fbbf24"),
+        "Связаться с клиентом повторно":("#f97316", "#fb923c"),
+        "Неразобранное":                ("#6b7280", "#9ca3af"),
+    }
+
+    stages_html = ""
+    for stage_name, count in stages:
+        if count == 0: continue
+        pct_of_total = round(count / total * 100, 1) if total > 0 else 0
+        bar_w = max(8, pct_of_total)
+        c1, c2 = STAGE_COLORS.get(stage_name, ("#6366f1", "#818cf8"))
+        is_stuck = any(w in stage_name.lower() for w in ["работу", "повторно", "неразобр"])
+        stuck_badge = '<span class="stuck-badge">⚠ ждут</span>' if is_stuck else ""
+        stages_html += f'''
+        <div class="stage-row">
+          <div class="stage-label">{stage_name}{stuck_badge}</div>
+          <div class="stage-bar-wrap">
+            <div class="stage-bar" style="width:{bar_w}%;background:linear-gradient(90deg,{c1},{c2})">
+              <span class="stage-count">{count}</span>
+            </div>
+          </div>
+          <div class="stage-pct">{pct_of_total}%</div>
+        </div>'''
+
+    stuck_total = sum(c for s, c in stages if any(w in s.lower() for w in ["работу", "повторно", "неразобр"]))
+    stuck_block = f'<div class="stuck-alert">⚠️ {stuck_total} лидов зависли и ждут обработки</div>' if stuck_total > 0 else ""
+
+    html = f'''<!DOCTYPE html><html><head><meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;700;900&family=JetBrains+Mono:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{background:#0a0a14;color:#e8e8f0;font-family:'Inter',sans-serif;padding:40px;min-width:900px}}
+.wrap{{max-width:900px;margin:0 auto}}
+
+/* Header */
+.hdr{{text-align:center;margin-bottom:36px}}
+.logo{{font-family:'Unbounded',sans-serif;font-size:36px;font-weight:900;letter-spacing:-1.5px;background:linear-gradient(135deg,#f0c040,#ffd700,#b8922e);-webkit-background-clip:text;-webkit-text-fill-color:transparent}}
+.campaign-name{{font-family:'Unbounded',sans-serif;font-size:26px;font-weight:700;color:#e8e8f0;margin:8px 0 4px;letter-spacing:-0.5px}}
+.period-lbl{{font-family:'Unbounded',sans-serif;font-size:22px;font-weight:800;background:linear-gradient(135deg,#e0e0f0,#a0a0c0);-webkit-background-clip:text;-webkit-text-fill-color:transparent}}
+.vs-label{{font-size:11px;color:#4a4a5a;letter-spacing:3px;text-transform:uppercase;margin-top:4px}}
+
+/* Section title */
+.sec{{font-size:11px;letter-spacing:4px;text-transform:uppercase;color:#6b6b80;text-align:center;margin:32px 0 14px;font-weight:600}}
+
+/* Meta top row */
+.meta-row{{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:8px}}
+.mcard{{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:18px 16px}}
+.mcard .cl{{font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#6b6b80;margin-bottom:8px;font-weight:600}}
+.cv-row{{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}}
+.cv{{font-family:'Unbounded',sans-serif;font-size:34px;font-weight:800;line-height:1}}
+.db-delta{{display:inline-flex;align-items:center;font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;padding:3px 9px;border-radius:14px;background:rgba(255,255,255,.08);white-space:nowrap}}
+.db-flat{{display:inline-flex;align-items:center;font-family:'JetBrains Mono',monospace;font-size:16px;padding:3px 9px;border-radius:14px;background:rgba(255,255,255,.04);color:#4a4a5a;white-space:nowrap}}
+
+/* CRM summary row */
+.crm-row{{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:8px}}
+
+/* Funnel stages */
+.funnel-card{{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:20px;padding:28px 32px}}
+.stage-row{{display:flex;align-items:center;gap:14px;margin-bottom:12px}}
+.stage-label{{font-size:13px;color:#b0b0c0;width:230px;flex-shrink:0;display:flex;align-items:center;gap:8px}}
+.stage-bar-wrap{{flex:1;background:rgba(255,255,255,.05);border-radius:8px;height:36px;overflow:hidden}}
+.stage-bar{{height:100%;border-radius:8px;display:flex;align-items:center;padding-left:12px;min-width:36px;transition:width .3s}}
+.stage-count{{font-family:'Unbounded',sans-serif;font-size:16px;font-weight:700;color:#fff}}
+.stage-pct{{font-family:'JetBrains Mono',monospace;font-size:14px;color:#6b6b80;width:48px;text-align:right}}
+.stuck-badge{{font-size:10px;background:rgba(251,191,36,.15);color:#fbbf24;border-radius:8px;padding:2px 6px;letter-spacing:0.5px}}
+.stuck-alert{{background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.2);border-radius:12px;padding:12px 20px;text-align:center;font-size:14px;color:#fbbf24;margin-top:16px}}
+
+/* Summary row */
+.summary-row{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:8px}}
+.sum-card{{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:20px;text-align:center}}
+.sum-label{{font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#6b6b80;margin-bottom:10px;font-weight:600}}
+.sum-val{{font-family:'Unbounded',sans-serif;font-size:38px;font-weight:800}}
+
+/* ROMI */
+.romi-card{{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:20px;text-align:center;margin-top:14px}}
+.romi-label{{font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#6b6b80;margin-bottom:10px}}
+.romi-val{{font-family:'Unbounded',sans-serif;font-size:54px;font-weight:900}}
+
+.footer{{text-align:center;font-size:11px;color:#2a2a3a;margin-top:32px;letter-spacing:2px}}
+</style></head><body><div class="wrap">
+
+<div class="hdr">
+  <div class="logo">iStudio</div>
+  <div class="campaign-name">{tag}</div>
+  <div class="period-lbl">{period_label}</div>
+  {prev_label}
+</div>
+
+<div class="sec">Meta Ads — кампания</div>
+<div class="meta-row">
+  <div class="mcard"><div class="cl">Расход</div><div class="cv-row"><div class="cv">${spend:,.0f}</div>{d_spend}</div></div>
+  <div class="mcard"><div class="cl">Лиды</div><div class="cv-row"><div class="cv">{leads}</div>{d_leads}</div></div>
+  <div class="mcard"><div class="cl">CPL</div><div class="cv-row"><div class="cv">{cpl_str}</div>{d_cpl}</div></div>
+  <div class="mcard"><div class="cl">ROMI</div><div class="cv-row"><div class="cv" style="color:{romi_col}">{romi:.0f}%</div></div></div>
+</div>
+
+<div class="sec">Воронка CRM — путь лидов</div>
+<div class="funnel-card">
+  {stages_html}
+  {stuck_block}
+</div>
+
+<div class="sec">Итоги</div>
+<div class="crm-row">
+  <div class="mcard"><div class="cl">Всего лидов</div><div class="cv-row"><div class="cv">{total}</div>{d_total}</div></div>
+  <div class="mcard"><div class="cl">Выполнено ✅</div><div class="cv-row"><div class="cv" style="color:#22c55e">{won}</div>{d_won}</div></div>
+  <div class="mcard"><div class="cl">Отказ ❌</div><div class="cv-row"><div class="cv" style="color:#ef4444">{lost}</div>{d_lost}</div></div>
+  <div class="mcard"><div class="cl">В работе ⏳</div><div class="cv-row"><div class="cv" style="color:#f59e0b">{in_prog}</div></div></div>
+</div>
+
+<div class="summary-row">
+  <div class="sum-card"><div class="sum-label">Конверсия</div><div class="cv-row" style="justify-content:center"><div class="sum-val" style="color:{'#22c55e' if conv>=20 else '#f59e0b' if conv>=10 else '#ef4444'}">{conv}%</div>{d_conv}</div></div>
+  <div class="sum-card"><div class="sum-label">Выручка</div><div class="cv-row" style="justify-content:center"><div class="sum-val" style="color:#22c55e">₪{revenue:,.0f}</div>{d_rev}</div></div>
+  <div class="sum-card"><div class="sum-label">Средний чек</div><div class="sum-val" style="color:#f0c040">₪{avg_deal:,.0f}</div></div>
+</div>
+
+<div class="footer">iStudio Campaign Dashboard · {tag} · {date_str}</div>
+</div></body></html>'''
+
+    html_path = tempfile.mktemp(suffix=".html", prefix="camp_dash_")
+    png_path  = tempfile.mktemp(suffix=".png",  prefix="campaign_")
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'])
+            page = browser.new_page(viewport={"width": 980, "height": 800}, device_scale_factor=2)
+            page.goto(f"file://{html_path}", wait_until="networkidle")
+            page.wait_for_timeout(1500)
+            height = page.evaluate("document.documentElement.scrollHeight")
+            page.set_viewport_size({"width": 980, "height": height})
+            page.wait_for_timeout(300)
+            page.screenshot(path=png_path, full_page=True, type="png")
+            browser.close()
+    finally:
+        try: os.unlink(html_path)
+        except: pass
+    return png_path
+
+# ============================================================
 # TELEGRAM HANDLERS
 # ============================================================
 @bot.message_handler(commands=["start"])
@@ -2193,9 +2526,78 @@ def transcribe_voice(message):
             pass
         return None
 
-def _handle_show(show, since, until, user_text, period=None):
+def _handle_show(show, since, until, user_text, period=None, intent=None):
     """Shared handler logic for both text and voice."""
-    if show == "all_campaigns":
+    if show == "campaign_funnel":
+        campaign_tag = (intent or {}).get("campaign_tag", "")
+        if not campaign_tag:
+            for word in ["карбон", "bbl", "эпил", "вект", "зима", "лето", "пилинг"]:
+                if word in user_text.lower():
+                    campaign_tag = word
+                    break
+        if not campaign_tag:
+            safe_send(MY_CHAT_ID, "❓ Укажи название кампании, например:\n'дашборд карбон ИВР'\n'воронка по BBL'")
+            return
+        safe_send(MY_CHAT_ID, f"📊 Строю дашборд кампании: {campaign_tag}...\n⏳")
+
+        # Fetch current campaign funnel data
+        camp_data = analyze_campaign_funnel(campaign_tag, since, until)
+        if "error" in camp_data:
+            safe_send(MY_CHAT_ID, f"❌ {camp_data['error']}")
+            return
+
+        # Fetch Meta spend data for this campaign tag
+        meta_camp = {}
+        try:
+            crm_raw = analyze_crm_data(since, until)
+            bt = crm_raw.get("by_campaign_tag", {})
+            for k, v in bt.items():
+                if campaign_tag.lower() in k.lower():
+                    meta_camp = {"spend": v.get("spend", 0), "leads": v.get("deals", 0), "cpl": v.get("avg_deal", 0)}
+                    break
+            # Try Meta data
+            roi = analyze_campaign_roi(since, until)
+            if roi and "campaigns" in roi:
+                for c in roi["campaigns"]:
+                    if campaign_tag.lower() in c.get("name", "").lower():
+                        meta_camp = {"spend": c.get("spend", 0), "leads": c.get("leads", 0)}
+                        break
+        except Exception as e:
+            print(f"Meta fetch for campaign dashboard: {e}")
+
+        # Fetch previous period for deltas
+        prev_camp = {}
+        try:
+            ps, pu = get_previous_period(since, until)
+            prev_raw = analyze_campaign_funnel(campaign_tag, ps, pu)
+            if "error" not in prev_raw:
+                prev_camp = prev_raw
+                prev_camp["since"] = ps
+                prev_camp["until"] = pu
+                # Try prev Meta spend
+                prev_roi = analyze_campaign_roi(ps, pu)
+                if prev_roi and "campaigns" in prev_roi:
+                    for c in prev_roi["campaigns"]:
+                        if campaign_tag.lower() in c.get("name", "").lower():
+                            prev_camp["spend"] = c.get("spend", 0)
+                            prev_camp["leads"] = c.get("leads", 0)
+                            prev_camp["cpl"] = round(c.get("spend",0)/c.get("leads",1), 2) if c.get("leads") else 0
+                            break
+        except Exception as e:
+            print(f"Prev period fetch for campaign dashboard: {e}")
+
+        period_names = {"today":"Сегодня","yesterday":"Вчера","week":"Неделя","month":"Месяц","3months":"3 месяца","6months":"Полгода","year":"Год"}
+        plabel = period_names.get(period, f"{since} — {until}") if period else f"{since} — {until}"
+
+        png_path = generate_campaign_dashboard_png(camp_data, meta_camp, plabel, prev_camp or None)
+        with open(png_path, 'rb') as photo:
+            bot.send_photo(MY_CHAT_ID, photo, caption=f"📊 {campaign_tag} · {plabel}")
+        os.unlink(png_path)
+
+        # Also send text summary
+        safe_send(MY_CHAT_ID, format_campaign_funnel(camp_data))
+        return
+    elif show == "all_campaigns":
         data = fetch_all_campaigns_list()
         safe_send(MY_CHAT_ID, generate_response(user_text, data))
     elif show == "crm":
@@ -2327,7 +2729,7 @@ def handle_voice(message):
         since, until = get_date_range(period)
 
     try:
-        _handle_show(show, since, until, text, period)
+        _handle_show(show, since, until, text, period, intent=intent)
     except Exception as e:
         print(f"Voice handler error: {e}")
         safe_send(MY_CHAT_ID, f"❌ Ошибка: {str(e)[:200]}")
@@ -2354,7 +2756,7 @@ def handle_text(message):
         since, until = get_date_range(period)
 
     try:
-        _handle_show(show, since, until, user_text, period)
+        _handle_show(show, since, until, user_text, period, intent=intent)
     except Exception as e:
         print(f"Handler error: {e}")
         safe_send(MY_CHAT_ID, f"❌ Ошибка при обработке: {str(e)[:200]}")
