@@ -661,13 +661,13 @@ def get_contact_notes(contact_id):
 def get_wazzup_messages(phones, limit=100):
     """
     Fetch chat messages from Wazzup24 API by phone numbers.
+    Uses known channel IDs directly.
     """
     if not WAZZUP_API_KEY:
         print("Wazzup API key not configured (WAZZUP_API_KEY)")
         return []
 
     from datetime import datetime as _dt
-    import re as _re
     messages = []
 
     headers = {
@@ -678,93 +678,102 @@ def get_wazzup_messages(phones, limit=100):
     # Normalize phones
     search_phones = set()
     for p in phones:
-        digits = _re.sub(r"[^\d]", "", p)
+        digits = re.sub(r"[^\d]", "", p)
         search_phones.add(digits)
         if digits.startswith("972") and len(digits) == 12:
             search_phones.add("0" + digits[3:])
+            search_phones.add(digits[3:])  # 9-digit
         elif digits.startswith("0") and len(digits) == 10:
             search_phones.add("972" + digits[1:])
+            search_phones.add(digits[1:])  # 9-digit
 
     print(f"Wazzup: searching for phones {list(search_phones)[:4]}")
 
-    # Step 1: Get all channels
+    # Get channels — try API first, fallback to known IDs
     try:
         ch_resp = requests.get("https://api.wazzup24.com/v3/channels",
                                headers=headers, timeout=15)
         print(f"Wazzup channels status: {ch_resp.status_code}")
-        if ch_resp.status_code != 200:
-            print(f"Wazzup channels error: {ch_resp.text[:200]}")
-            return []
-        channels_resp = ch_resp.json()
-        # Wazzup returns either {"channels": [...]} or directly [...]
-        if isinstance(channels_resp, list):
-            channels = channels_resp
+        if ch_resp.status_code == 200:
+            channels_raw = ch_resp.json()
+            channels = channels_raw if isinstance(channels_raw, list) else (channels_raw.get("channels") or [])
         else:
-            channels = channels_resp.get("channels") or []
-        print(f"Wazzup: found {len(channels)} channels")
+            channels = []
     except Exception as e:
-        print(f"Wazzup channels fetch error: {e}")
-        return []
+        print(f"Wazzup channels error: {e}")
+        channels = []
 
-    # Step 2: For each channel try to get messages directly by phone
+    # If API didn't return channels — use known channel IDs from amoCRM Wazzup settings
+    if not channels:
+        print("Wazzup: using hardcoded channel IDs")
+        channels = [
+            {"channelId": "972534488475", "channelType": "whatsapp"},
+            {"channelId": "972533222611", "channelType": "whatsapp"},
+        ]
+
+    print(f"Wazzup: trying {len(channels)} channels")
+
     for ch in channels:
         channel_id = ch.get("channelId") or ch.get("id")
-        channel_type = (ch.get("channelType") or ch.get("transport") or "").lower()
+        channel_type = (ch.get("channelType") or ch.get("transport") or "whatsapp").lower()
         if not channel_id:
             continue
 
-        if "instagram" in channel_type:
-            ch_label = "Instagram"
-        elif "whatsapp" in channel_type or "waba" in channel_type:
-            ch_label = "WhatsApp"
-        elif "telegram" in channel_type:
-            ch_label = "Telegram"
-        else:
-            ch_label = channel_type or "chat"
+        ch_label = "Instagram" if "instagram" in channel_type else \
+                   "Telegram" if "telegram" in channel_type else "WhatsApp"
 
-        for phone in list(search_phones)[:2]:  # try top 2 phone variants
+        for phone in list(search_phones):
             phone_digits = re.sub(r"[^\d]", "", phone)
-            # Try formats: with country code, without
-            phone_intl = phone_digits if phone_digits.startswith("972") else "972" + phone_digits.lstrip("0")
+            # Use international format for chatId
+            if phone_digits.startswith("972"):
+                chat_id = phone_digits
+            elif phone_digits.startswith("0") and len(phone_digits) == 10:
+                chat_id = "972" + phone_digits[1:]
+            elif len(phone_digits) == 9:
+                chat_id = "972" + phone_digits
+            else:
+                chat_id = phone_digits
 
-            # Wazzup API endpoint variants to try
-            endpoints_to_try = [
-                # v3 variants
-                ("GET", f"https://api.wazzup24.com/v3/messages?channelId={channel_id}&chatId={phone_intl}&count={limit}"),
-                ("GET", f"https://api.wazzup24.com/v3/messages?channelId={channel_id}&chatId={phone_digits}&count={limit}"),
-                # v1 variants
-                ("GET", f"https://api.wazzup24.com/v1/messages?channelId={channel_id}&chatId={phone_intl}&count={limit}"),
-                # Direct chat history
-                ("GET", f"https://api.wazzup24.com/v3/chat?channelId={channel_id}&chatId={phone_intl}"),
-            ]
+            try:
+                msg_resp = requests.get(
+                    "https://api.wazzup24.com/v3/messages",
+                    headers=headers,
+                    params={"channelId": channel_id, "chatId": chat_id, "count": limit},
+                    timeout=15,
+                )
+                print(f"Wazzup messages [{ch_label}/{chat_id[-6:]}] ch={channel_id[-6:]}: {msg_resp.status_code}")
+                if msg_resp.status_code != 200:
+                    continue
 
-            for method, url in endpoints_to_try:
-                try:
-                    r = requests.get(url, headers=headers, timeout=15)
-                    print(f"Wazzup [{ch_label}] {url.split('wazzup24.com')[1][:60]}: {r.status_code}")
-                    if r.status_code == 200:
-                        data_r = r.json()
-                        msgs = data_r if isinstance(data_r, list) else (
-                            data_r.get("messages") or data_r.get("data") or []
-                        )
-                        print(f"  -> {len(msgs)} messages found!")
-                        for m in msgs:
-                            ts = m.get("timestamp") or m.get("dateTime") or m.get("created_at") or 0
-                            text = m.get("text") or m.get("body") or m.get("caption") or m.get("content") or ""
-                            incoming = m.get("incoming")
-                            if incoming is None:
-                                incoming = m.get("type") not in ("outbound", "out", "sent")
-                            direction = "👤 Клиент" if incoming else "💼 Менеджер"
-                            if text:
-                                dt_str = _dt.fromtimestamp(ts).strftime("%d.%m.%Y %H:%M") if ts else ""
-                                messages.append({
-                                    "date": dt_str, "direction": direction,
-                                    "channel": ch_label, "text": text[:600], "ts": ts,
-                                })
-                        if msgs:
-                            break  # found messages, no need to try more endpoints
-                except Exception as e:
-                    print(f"Wazzup endpoint error: {e}")
+                msgs_raw = msg_resp.json()
+                msgs = msgs_raw if isinstance(msgs_raw, list) else (msgs_raw.get("messages") or [])
+                print(f"  -> {len(msgs)} messages!")
+
+                for m in msgs:
+                    ts = m.get("timestamp") or m.get("dateTime") or 0
+                    # dateTime may be ISO string
+                    if isinstance(ts, str):
+                        try:
+                            from datetime import datetime as _dt2
+                            ts = int(_dt2.fromisoformat(ts.replace("Z","+00:00")).timestamp())
+                        except: ts = 0
+                    text = m.get("text") or m.get("body") or m.get("caption") or ""
+                    incoming = m.get("incoming")
+                    if incoming is None:
+                        status = m.get("status","")
+                        incoming = status in ("inbound", "received", "") or m.get("isEcho") == False
+                    direction = "👤 Клиент" if incoming else "💼 Менеджер"
+                    if text:
+                        dt_str = _dt.fromtimestamp(ts).strftime("%d.%m.%Y %H:%M") if ts else ""
+                        messages.append({
+                            "date": dt_str, "direction": direction,
+                            "channel": ch_label, "text": text[:600], "ts": ts,
+                        })
+                if msgs:
+                    break  # found for this phone, no need to try other formats
+
+            except Exception as e:
+                print(f"Wazzup messages error: {e}")
 
     # Deduplicate and sort
     seen = set()
