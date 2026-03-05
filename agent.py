@@ -784,55 +784,29 @@ def get_wazzup_messages(phones, limit=100):
 
 def get_contact_conversations(contact_id, lead_ids=None, all_phones=None):
     """
-    Fetch chat messages. Tries Wazzup API first (WhatsApp/Instagram),
-    then amoCRM notes as fallback.
+    Fetch chat messages. Tries Wazzup API first, then amoCRM notes as fallback.
     """
     from datetime import datetime as _dt
     messages = []
 
-    # 1. Try Wazzup API directly (most reliable for WhatsApp/Instagram)
+    # 1. Wazzup API (WhatsApp / Instagram / Telegram)
     if WAZZUP_API_KEY and all_phones:
         wz_msgs = get_wazzup_messages(all_phones)
         if wz_msgs:
             return wz_msgs
+        # Wazzup key present but returned nothing — still try amoCRM notes below
 
-    # 2. Try amoCRM /talks API
-    talks_data = amocrm_request(f"talks?contact_id={contact_id}&limit=100")
-    if talks_data:
-        for talk in (talks_data.get("_embedded") or {}).get("talks") or []:
-            talk_id = talk.get("id")
-            # Fetch messages within each talk
-            msgs_data = amocrm_request(f"talks/{talk_id}/messages?limit=200")
-            if msgs_data:
-                for m in (msgs_data.get("_embedded") or {}).get("messages") or []:
-                    created = m.get("created_at", 0)
-                    text = m.get("text") or m.get("content") or ""
-                    author_type = m.get("author", {}).get("type", "")
-                    direction = "👤 Клиент" if author_type == "contact" else "💼 Менеджер"
-                    channel = talk.get("channel_type", "chat")
-                    if text:
-                        messages.append({
-                            "date": _dt.fromtimestamp(created).strftime("%d.%m.%Y %H:%M") if created else "",
-                            "direction": direction,
-                            "channel": channel,
-                            "text": text[:600],
-                            "ts": created,
-                        })
-
-    # 2. Try contact notes — Wazzup often stores as note_type containing "wazzup"/"whatsapp"/"instagram"
+    # 2. amoCRM contact notes (fallback — works when no Wazzup key)
     notes_data = amocrm_request(f"contacts/{contact_id}/notes?limit=500")
     if notes_data:
         for n in (notes_data.get("_embedded") or {}).get("notes") or []:
             nt = n.get("note_type", "")
             params = n.get("params") or {}
             created = n.get("created_at", 0)
-            # Message content in various fields
             text = (params.get("text") or params.get("message") or
                     params.get("body") or params.get("content") or "")
             income = params.get("income")
             direction = "👤 Клиент" if income is True else ("💼 Менеджер" if income is False else "")
-
-            # Channel detection
             nt_low = nt.lower()
             if "whatsapp" in nt_low or "wazzup" in nt_low:
                 channel = "WhatsApp"
@@ -846,7 +820,6 @@ def get_contact_conversations(contact_id, lead_ids=None, all_phones=None):
                 channel = "Заметка"
             else:
                 channel = nt or "chat"
-
             if text and created:
                 messages.append({
                     "date": _dt.fromtimestamp(created).strftime("%d.%m.%Y %H:%M"),
@@ -856,9 +829,9 @@ def get_contact_conversations(contact_id, lead_ids=None, all_phones=None):
                     "ts": created,
                 })
 
-    # 3. Also check lead-level notes for each recent deal
+    # 3. Lead notes for last 3 deals only
     if lead_ids:
-        for lid in lead_ids[:5]:  # only last 5 deals
+        for lid in lead_ids[:3]:
             ln_data = amocrm_request(f"leads/{lid}/notes?limit=100")
             if ln_data:
                 for n in (ln_data.get("_embedded") or {}).get("notes") or []:
@@ -884,49 +857,19 @@ def get_contact_conversations(contact_id, lead_ids=None, all_phones=None):
                             "ts": created,
                         })
 
-    # Deduplicate by (ts, text) and sort chronologically
+    # Deduplicate and sort
     seen = set()
     unique = []
     for m in messages:
-        key = (m.get("ts"), m.get("text","")[:50])
+        key = (m.get("ts"), m.get("text","")[:40])
         if key not in seen:
             seen.add(key)
             unique.append(m)
-
     unique.sort(key=lambda x: x.get("ts", 0))
     for m in unique: m.pop("ts", None)
-
     print(f"Conversations for contact {contact_id}: {len(unique)} messages total")
     return unique
 
-
-    """Fetch full deal details including custom fields."""
-    data = amocrm_request(f"leads/{deal_id}?with=contacts,tags")
-    if not data:
-        return {}
-    cf = {}
-    for field in (data.get("custom_fields_values") or []):
-        fname = field.get("field_name", "")
-        vals = field.get("values") or []
-        if fname and vals:
-            val = vals[0].get("value")
-            if isinstance(val, int) and val > 1000000000:
-                from datetime import datetime as _dt
-                try: val = _dt.fromtimestamp(val).strftime("%d.%m.%Y %H:%M")
-                except: pass
-            cf[fname] = val
-    tags = [t.get("name","") for t in (data.get("_embedded") or {}).get("tags") or []]
-    return {
-        "id": deal_id,
-        "name": data.get("name", ""),
-        "price": data.get("price", 0),
-        "status_id": data.get("status_id"),
-        "pipeline_id": data.get("pipeline_id"),
-        "created_at": data.get("created_at", 0),
-        "closed_at": data.get("closed_at", 0),
-        "custom_fields": cf,
-        "tags": tags,
-    }
 
 def get_deal_full(deal_id):
     """Fetch full deal details including custom fields."""
