@@ -418,17 +418,27 @@ def get_amocrm_contacts(contact_ids):
 
 def find_contact_by_phone(phone):
     """Search amoCRM contact by phone number. Returns contact dict or None."""
-    # Normalize: strip spaces, dashes, keep digits and leading +
     import re
-    digits = re.sub(r"[^\d+]", "", phone.strip())
-    # Try with and without country code
-    variants = [digits]
-    if digits.startswith("+"):
-        variants.append(digits[1:])  # without +
-    if digits.startswith("972"):
-        variants.append("0" + digits[3:])  # Israeli local format
-    if digits.startswith("0") and len(digits) == 10:
-        variants.append("+972" + digits[1:])
+    digits = re.sub(r"[^\d]", "", phone.strip())
+
+    # Build all variants to try
+    variants = set()
+    variants.add(digits)                          # as-is digits only
+
+    if digits.startswith("972") and len(digits) == 12:
+        local = "0" + digits[3:]                  # 972541234567 → 0541234567
+        variants.add(local)
+        variants.add("+" + digits)                # +972541234567
+        variants.add(digits[3:])                  # 541234567
+    elif digits.startswith("0") and len(digits) == 10:
+        intl = "972" + digits[1:]                 # 0541234567 → 972541234567
+        variants.add("+" + intl)
+        variants.add(intl)
+        variants.add(digits[1:])                  # 541234567
+    elif len(digits) == 9:                        # already without 0 or country code
+        variants.add("0" + digits)
+        variants.add("972" + digits)
+        variants.add("+972" + digits)
 
     for q in variants:
         data = amocrm_request(f"contacts?query={q}&with=leads")
@@ -451,6 +461,7 @@ def find_contact_by_phone(phone):
                     "phone": phone_val or phone,
                     "lead_ids": lead_ids,
                 }
+        time.sleep(0.15)
     return None
 
 def get_deal_notes(deal_id):
@@ -588,6 +599,35 @@ def get_contact_notes(contact_id):
     return {
         "id": deal_id,
         "name": data.get("name",""),
+        "price": data.get("price", 0),
+        "status_id": data.get("status_id"),
+        "pipeline_id": data.get("pipeline_id"),
+        "created_at": data.get("created_at", 0),
+        "closed_at": data.get("closed_at", 0),
+        "custom_fields": cf,
+        "tags": tags,
+    }
+
+def get_deal_full(deal_id):
+    """Fetch full deal details including custom fields."""
+    data = amocrm_request(f"leads/{deal_id}?with=contacts,tags")
+    if not data:
+        return {}
+    cf = {}
+    for field in (data.get("custom_fields_values") or []):
+        fname = field.get("field_name", "")
+        vals = field.get("values") or []
+        if fname and vals:
+            val = vals[0].get("value")
+            if isinstance(val, int) and val > 1000000000:
+                from datetime import datetime as _dt
+                try: val = _dt.fromtimestamp(val).strftime("%d.%m.%Y %H:%M")
+                except: pass
+            cf[fname] = val
+    tags = [t.get("name","") for t in (data.get("_embedded") or {}).get("tags") or []]
+    return {
+        "id": deal_id,
+        "name": data.get("name", ""),
         "price": data.get("price", 0),
         "status_id": data.get("status_id"),
         "pipeline_id": data.get("pipeline_id"),
