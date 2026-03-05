@@ -419,6 +419,44 @@ def get_amocrm_contacts(contact_ids):
         time.sleep(0.3)
     return contacts
 
+def _parse_contact_from_amocrm(c, query_fallback=""):
+    """Extract full contact info from amoCRM contact object."""
+    phones, email, custom_fields = [], "", {}
+    for cf in (c.get("custom_fields_values") or []):
+        code  = cf.get("field_code", "")
+        fname = cf.get("field_name", "")
+        vals  = cf.get("values") or []
+        if not vals: continue
+        if code == "PHONE":
+            for v in vals:
+                p = v.get("value","")
+                if p: phones.append(p)
+        elif code == "EMAIL":
+            email = vals[0].get("value","")
+        else:
+            val = vals[0].get("value")
+            key = fname or code
+            if key and val is not None:
+                custom_fields[key] = val
+    lead_ids = [lnk["id"] for lnk in ((c.get("_embedded") or {}).get("leads") or [])]
+    return {
+        "id": c["id"],
+        "name": c.get("name", "Без имени"),
+        "phone": phones[0] if phones else query_fallback,
+        "all_phones": phones,
+        "email": email,
+        "lead_ids": lead_ids,
+        "custom_fields": custom_fields,
+    }
+
+def find_contact_by_name(name):
+    """Search amoCRM contact by name. Returns list of matches."""
+    data = amocrm_request(f"contacts?query={name}&with=leads")
+    if not data:
+        return []
+    contacts = (data.get("_embedded") or {}).get("contacts") or []
+    return [_parse_contact_from_amocrm(c) for c in contacts[:5]]
+
 def find_contact_by_phone(phone):
     """Search amoCRM contact by phone. Returns full contact dict with all custom fields."""
     import re
@@ -445,46 +483,33 @@ def find_contact_by_phone(phone):
         if data:
             contacts = (data.get("_embedded") or {}).get("contacts") or []
             if contacts:
-                c = contacts[0]
-
-                # Extract ALL phone numbers
-                phones = []
-                email = ""
-                custom_fields = {}
-                for cf in (c.get("custom_fields_values") or []):
-                    code = cf.get("field_code", "")
-                    fname = cf.get("field_name", "")
-                    vals = cf.get("values") or []
-                    if not vals: continue
-                    if code == "PHONE":
-                        for v in vals:
-                            p = v.get("value","")
-                            if p: phones.append(p)
-                    elif code == "EMAIL":
-                        email = vals[0].get("value","")
-                    else:
-                        # Custom fields: visit count, status, gender, etc.
-                        val = vals[0].get("value")
-                        key = fname or code
-                        if key and val is not None:
-                            custom_fields[key] = val
-
-                lead_ids = [
-                    lnk["id"] for lnk in
-                    ((c.get("_embedded") or {}).get("leads") or [])
-                ]
-
-                return {
-                    "id": c["id"],
-                    "name": c.get("name", "Без имени"),
-                    "phone": phones[0] if phones else phone,
-                    "all_phones": phones,
-                    "email": email,
-                    "lead_ids": lead_ids,
-                    "custom_fields": custom_fields,  # Кол-во процедур, статус, пол и тд
-                }
+                return _parse_contact_from_amocrm(contacts[0], phone)
         time.sleep(0.15)
     return None
+
+def find_client(query):
+    """
+    Universal client search — auto-detects phone vs name.
+    Returns (contact, candidates_list) where candidates_list is non-empty
+    only if multiple name matches found.
+    """
+    import re
+    # Detect if it looks like a phone number
+    digits = re.sub(r"[^\d]", "", query)
+    is_phone = len(digits) >= 7 and len(digits) <= 13
+
+    if is_phone:
+        contact = find_contact_by_phone(query)
+        return contact, []
+    else:
+        candidates = find_contact_by_name(query)
+        if len(candidates) == 1:
+            return candidates[0], []
+        elif len(candidates) > 1:
+            return None, candidates  # ambiguous — show list
+        else:
+            return None, []
+
 
 def get_deal_notes(deal_id):
     """Fetch all notes/events for a deal including WhatsApp & Instagram DM messages."""
@@ -799,34 +824,44 @@ def get_deal_full(deal_id):
         "tags": tags,
     }
 
-def analyze_client_by_phone(phone):
-    """Full client profile: find by phone → get all deals → get notes → AI analysis."""
-    contact = find_contact_by_phone(phone)
+def analyze_client(query):
+    """Full client profile by phone OR name."""
+    contact, candidates = find_client(query)
+
+    if candidates:
+        # Multiple name matches — return list for user to pick
+        lines = [f"🔍 Найдено несколько клиентов по запросу «{query}»:\n"]
+        for i, c in enumerate(candidates, 1):
+            phones = ", ".join(c.get("all_phones", [])) or "нет телефона"
+            cf = c.get("custom_fields", {})
+            status = cf.get("Статус пациента") or cf.get("Статус клиента") or ""
+            visits = cf.get("Количество процедур") or ""
+            lines.append(f"{i}. {c['name']} | {phones}"
+                         + (f" | {status}" if status else "")
+                         + (f" | {visits} процедур" if visits else ""))
+        lines.append("\nУточни номер телефона для точного анализа.")
+        return {"error": "\n".join(lines)}
+
     if not contact:
-        return {"error": f"Контакт с номером {phone} не найден в amoCRM"}
+        return {"error": f"Клиент «{query}» не найден в amoCRM"}
 
     lead_ids = contact.get("lead_ids", [])
 
-    # Contact card fields — ground truth for visit count & status
     card = contact.get("custom_fields", {})
-    card_visits    = card.get("Количество процедур") or card.get("Кол-во процедур") or card.get("Visits")
-    card_status    = card.get("Статус пациента") or card.get("Статус клиента") or card.get("Status")
-    card_gender    = card.get("Пол") or card.get("Gender")
+    card_visits = card.get("Количество процедур") or card.get("Кол-во процедур") or card.get("Visits")
+    card_status = card.get("Статус пациента") or card.get("Статус клиента") or card.get("Status")
+    card_gender = card.get("Пол") or card.get("Gender")
 
-    # Fetch ALL deals (no limit) but cap notes fetching to last 20 for speed
-    all_deal_ids = lead_ids  # could be 50+
-    print(f"Client {contact['name']} has {len(all_deal_ids)} deals total")
+    print(f"Client {contact['name']} has {len(lead_ids)} deals total")
 
-    # For stats: fetch summary of all deals (price + stage) without notes
     deals_summary = []
-    for lid in all_deal_ids[:60]:   # cap at 60 for API sanity
+    for lid in lead_ids[:60]:
         d = get_deal_full(lid)
         if d:
             deals_summary.append(d)
         time.sleep(0.15)
 
-    # For notes/analysis: fetch detailed notes only for last 15 deals
-    recent_ids = all_deal_ids[:15]
+    recent_ids = lead_ids[:15]
     deals_detailed = []
     for lid in recent_ids:
         d = next((x for x in deals_summary if x["id"] == lid), get_deal_full(lid))
@@ -835,12 +870,10 @@ def analyze_client_by_phone(phone):
             d["notes"] = notes
             deals_detailed.append(d)
 
-    # Real totals from all deals
     total_spent  = sum(d.get("price", 0) for d in deals_summary if d.get("price") and d.get("status_id") in (52041937, 70503946))
     total_deals  = len(deals_summary)
     won_deals    = sum(1 for d in deals_summary if d.get("status_id") in (52041937, 70503946))
 
-    # Contact-level conversations (WhatsApp/Instagram/Facebook via Wazzup)
     contact_notes = get_contact_conversations(contact["id"], lead_ids=lead_ids[:5])
 
     return {
@@ -848,13 +881,17 @@ def analyze_client_by_phone(phone):
         "card_visits": card_visits,
         "card_status": card_status,
         "card_gender": card_gender,
-        "deals": deals_detailed,          # last 15 with notes
+        "deals": deals_detailed,
         "all_deals_count": total_deals,
         "won_deals_count": won_deals,
         "contact_notes": contact_notes,
         "total_deals": total_deals,
         "total_spent": total_spent,
     }
+
+# Keep old name as alias for backwards compat
+def analyze_client_by_phone(phone):
+    return analyze_client(phone)
 
 def format_client_profile(data, stage_map=None):
     """Send client data to Claude for psychological profile + recommendations."""
@@ -953,7 +990,10 @@ def format_client_profile(data, stage_map=None):
 5. РЕКОМЕНДАЦИИ МЕНЕДЖЕРУ
 Конкретно: как закрыть следующую сделку с этим клиентом, что предложить, чего избегать, когда лучше написать.
 
-Пиши коротко и по делу. Максимум 2000 символов."""
+ВАЖНЫЙ КОНТЕКСТ ПРО ЦЕНЫ В СДЕЛКАХ:
+- Сделки с ценой ₪0 — это НЕ бесплатные визиты. Причины: повторная процедура по пакету (оплачена в первой сделке), или цена не проставлена менеджером.
+- Реальное число визитов = поле "Количество процедур" в карточке контакта (если есть), НЕ количество сделок.
+- Не пиши "клиент потратил ₪X" если видишь много нулей — лучше напиши "выручка по заполненным сделкам: ₪X, реально процедур: Y".
 
     try:
         response = call_claude(ANALYST_PROMPT, prompt, max_tokens=2000)
@@ -1849,7 +1889,7 @@ def fetch_comparison_data(since, until):
 def render_delta_html(current, previous, inverse=False, prefix="", suffix=""):
     """
     Returns an HTML snippet for a delta badge.
-    inverse=True: growth is bad (red), decline is good (green) — e.g. CPL, CAC.
+    inverse=True: growth is bad (red), decline is good (green) - e.g. CPL, CAC.
     """
     d = calc_delta(current, previous, inverse=inverse)
     if d is None:
@@ -3183,18 +3223,26 @@ def _handle_show(show, since, until, user_text, period=None, intent=None):
         safe_send(MY_CHAT_ID, format_campaign_funnel(camp_data))
         return
     elif show == "client_profile":
-        phone = (intent or {}).get("phone", "")
-        if not phone:
-            # Try to extract phone from user text
+        query = (intent or {}).get("phone", "") or (intent or {}).get("client_name", "")
+        if not query:
             import re
-            m = re.search(r"[\+\d][\d\s\-\(\)]{7,}", user_text)
+            # Try phone first
+            m = re.search(r"[\+\d][\d\s\-]{7,}", user_text)
             if m:
-                phone = re.sub(r"[\s\-\(\)]", "", m.group())
-        if not phone:
-            safe_send(MY_CHAT_ID, "❓ Укажи номер телефона клиента, например:\n'профиль клиента +972501234567'")
+                query = re.sub(r"[\s\-]", "", m.group())
+            else:
+                # Try name — extract after keywords
+                for kw in ["клиент", "кто такой", "кто такая", "профиль", "расскажи о", "что знаешь о", "найди"]:
+                    if kw in user_text.lower():
+                        idx = user_text.lower().index(kw) + len(kw)
+                        name_part = user_text[idx:].strip().split()[0:2]
+                        query = " ".join(name_part)
+                        break
+        if not query:
+            safe_send(MY_CHAT_ID, "❓ Укажи телефон или имя клиента, например:\n'профиль Ирена'\n'кто такой +972501234567'\n'найди Алёна Gold'")
             return
-        safe_send(MY_CHAT_ID, f"🔍 Ищу клиента {phone} в amoCRM...\n⏳")
-        data = analyze_client_by_phone(phone)
+        safe_send(MY_CHAT_ID, f"🔍 Ищу клиента «{query}» в amoCRM...\n⏳")
+        data = analyze_client(query)
         safe_send(MY_CHAT_ID, format_client_profile(data))
         data = fetch_all_campaigns_list()
         safe_send(MY_CHAT_ID, generate_response(user_text, data))
