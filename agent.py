@@ -767,6 +767,35 @@ def get_contact_conversations(contact_id, lead_ids=None):
         "tags": tags,
     }
 
+def get_deal_full(deal_id):
+    """Fetch full deal details including custom fields."""
+    data = amocrm_request(f"leads/{deal_id}?with=contacts,tags")
+    if not data:
+        return {}
+    cf = {}
+    for field in (data.get("custom_fields_values") or []):
+        fname = field.get("field_name", "")
+        vals = field.get("values") or []
+        if fname and vals:
+            val = vals[0].get("value")
+            if isinstance(val, int) and val > 1000000000:
+                from datetime import datetime as _dt
+                try: val = _dt.fromtimestamp(val).strftime("%d.%m.%Y %H:%M")
+                except: pass
+            cf[fname] = val
+    tags = [t.get("name","") for t in (data.get("_embedded") or {}).get("tags") or []]
+    return {
+        "id": deal_id,
+        "name": data.get("name", ""),
+        "price": data.get("price", 0),
+        "status_id": data.get("status_id"),
+        "pipeline_id": data.get("pipeline_id"),
+        "created_at": data.get("created_at", 0),
+        "closed_at": data.get("closed_at", 0),
+        "custom_fields": cf,
+        "tags": tags,
+    }
+
 def analyze_client_by_phone(phone):
     """Full client profile: find by phone → get all deals → get notes → AI analysis."""
     contact = find_contact_by_phone(phone)
