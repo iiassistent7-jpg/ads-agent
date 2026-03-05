@@ -706,7 +706,7 @@ def get_wazzup_messages(phones, limit=100):
         print(f"Wazzup channels fetch error: {e}")
         return []
 
-    # Step 2: For each channel get all chats, then filter by phone
+    # Step 2: For each channel try to get messages directly by phone
     for ch in channels:
         channel_id = ch.get("channelId") or ch.get("id")
         channel_type = (ch.get("channelType") or ch.get("transport") or "").lower()
@@ -722,71 +722,49 @@ def get_wazzup_messages(phones, limit=100):
         else:
             ch_label = channel_type or "chat"
 
-        try:
-            # Get all chats for this channel
-            chats_resp = requests.get(
-                "https://api.wazzup24.com/v3/chats",
-                headers=headers,
-                params={"channelId": channel_id},
-                timeout=20,
-            )
-            print(f"Wazzup chats list [{ch_label}]: {chats_resp.status_code}")
-            if chats_resp.status_code != 200:
-                continue
+        for phone in list(search_phones)[:2]:  # try top 2 phone variants
+            phone_digits = re.sub(r"[^\d]", "", phone)
+            # Try formats: with country code, without
+            phone_intl = phone_digits if phone_digits.startswith("972") else "972" + phone_digits.lstrip("0")
 
-            chats_raw = chats_resp.json()
-            chats = chats_raw if isinstance(chats_raw, list) else (chats_raw.get("chats") or [])
-            print(f"  -> {len(chats)} chats in channel")
+            # Wazzup API endpoint variants to try
+            endpoints_to_try = [
+                # v3 variants
+                ("GET", f"https://api.wazzup24.com/v3/messages?channelId={channel_id}&chatId={phone_intl}&count={limit}"),
+                ("GET", f"https://api.wazzup24.com/v3/messages?channelId={channel_id}&chatId={phone_digits}&count={limit}"),
+                # v1 variants
+                ("GET", f"https://api.wazzup24.com/v1/messages?channelId={channel_id}&chatId={phone_intl}&count={limit}"),
+                # Direct chat history
+                ("GET", f"https://api.wazzup24.com/v3/chat?channelId={channel_id}&chatId={phone_intl}"),
+            ]
 
-            # Find chats matching our phone numbers
-            matched_chats = []
-            for chat in chats:
-                chat_id = str(chat.get("chatId") or "")
-                chat_phone = chat.get("phone") or chat.get("chatId") or ""
-                chat_digits = re.sub(r"[^\d]", "", str(chat_phone))
-                # Match if any of our search phones overlap
-                for sp in search_phones:
-                    sp_digits = re.sub(r"[^\d]", "", sp)
-                    if sp_digits in chat_digits or chat_digits in sp_digits or chat_digits[-9:] == sp_digits[-9:]:
-                        matched_chats.append((chat_id, chat))
-                        break
-
-            print(f"  -> {len(matched_chats)} matched chats for our phones")
-
-            for chat_id, chat in matched_chats:
-                msg_resp = requests.get(
-                    "https://api.wazzup24.com/v3/messages",
-                    headers=headers,
-                    params={"channelId": channel_id, "chatId": chat_id, "count": limit},
-                    timeout=20,
-                )
-                if msg_resp.status_code != 200:
-                    print(f"  messages error: {msg_resp.status_code}")
-                    continue
-
-                msgs_raw = msg_resp.json()
-                msgs = msgs_raw if isinstance(msgs_raw, list) else (msgs_raw.get("messages") or [])
-                print(f"  -> {len(msgs)} messages in chat {chat_id[:10]}...")
-
-                for m in msgs:
-                    ts = m.get("timestamp") or m.get("dateTime") or 0
-                    text = m.get("text") or m.get("body") or m.get("caption") or ""
-                    incoming = m.get("incoming")
-                    if incoming is None:
-                        incoming = m.get("type") != "outbound"
-                    direction = "👤 Клиент" if incoming else "💼 Менеджер"
-                    if text:
-                        dt_str = _dt.fromtimestamp(ts).strftime("%d.%m.%Y %H:%M") if ts else ""
-                        messages.append({
-                            "date": dt_str,
-                            "direction": direction,
-                            "channel": ch_label,
-                            "text": text[:600],
-                            "ts": ts,
-                        })
-
-        except Exception as e:
-            print(f"Wazzup channel {channel_id} error: {e}")
+            for method, url in endpoints_to_try:
+                try:
+                    r = requests.get(url, headers=headers, timeout=15)
+                    print(f"Wazzup [{ch_label}] {url.split('wazzup24.com')[1][:60]}: {r.status_code}")
+                    if r.status_code == 200:
+                        data_r = r.json()
+                        msgs = data_r if isinstance(data_r, list) else (
+                            data_r.get("messages") or data_r.get("data") or []
+                        )
+                        print(f"  -> {len(msgs)} messages found!")
+                        for m in msgs:
+                            ts = m.get("timestamp") or m.get("dateTime") or m.get("created_at") or 0
+                            text = m.get("text") or m.get("body") or m.get("caption") or m.get("content") or ""
+                            incoming = m.get("incoming")
+                            if incoming is None:
+                                incoming = m.get("type") not in ("outbound", "out", "sent")
+                            direction = "👤 Клиент" if incoming else "💼 Менеджер"
+                            if text:
+                                dt_str = _dt.fromtimestamp(ts).strftime("%d.%m.%Y %H:%M") if ts else ""
+                                messages.append({
+                                    "date": dt_str, "direction": direction,
+                                    "channel": ch_label, "text": text[:600], "ts": ts,
+                                })
+                        if msgs:
+                            break  # found messages, no need to try more endpoints
+                except Exception as e:
+                    print(f"Wazzup endpoint error: {e}")
 
     # Deduplicate and sort
     seen = set()
@@ -1187,6 +1165,10 @@ def format_client_profile(data, stage_map=None):
         return f"❌ Ошибка анализа: {e}"
 
 
+    tags = (deal.get("_embedded") or {}).get("tags") or []
+    return [t.get("name", "") for t in tags]
+
+def get_deal_tags(deal):
     tags = (deal.get("_embedded") or {}).get("tags") or []
     return [t.get("name", "") for t in tags]
 
