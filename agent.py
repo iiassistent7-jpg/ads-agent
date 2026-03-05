@@ -995,6 +995,8 @@ def format_client_profile(data, stage_map=None):
 - Реальное число визитов = поле "Количество процедур" в карточке контакта (если есть), НЕ количество сделок.
 - Не пиши "клиент потратил ₪X" если видишь много нулей — лучше напиши "выручка по заполненным сделкам: ₪X, реально процедур: Y".
 
+Пиши коротко и по делу. Максимум 2000 символов."""
+
     try:
         response = call_claude(ANALYST_PROMPT, prompt, max_tokens=2000)
         # Count messages
@@ -2563,21 +2565,13 @@ body::after{{content:'';position:fixed;bottom:-300px;right:-200px;width:800px;he
 
 <div class="sec">Рабочая воронка (новые клиенты)</div>
 <div class="fcard">
-  {f"""<div class="fstats">
-    <div class="fstat"><div class="fstat-l">Заявок</div><div class="fstat-v">{wf_total} {delta_wf_total}</div></div>
-    <div class="fstat"><div class="fstat-l">Выполнено</div><div class="fstat-v" style="color:#22c55e">{wf_won} {delta_wf_won}</div></div>
-    <div class="fstat"><div class="fstat-l">Выручка</div><div class="fstat-v" style="color:#f0c040">₪{wf_rev:,.0f} {delta_wf_rev}</div></div>
-  </div>""" if wf_total > 0 else ""}
+  {('<div class="fstats"><div class="fstat"><div class="fstat-l">Заявок</div><div class="fstat-v">' + str(wf_total) + " " + delta_wf_total + '</div></div><div class="fstat"><div class="fstat-l">Выполнено</div><div class="fstat-v" style="color:#22c55e">' + str(wf_won) + " " + delta_wf_won + '</div></div><div class="fstat"><div class="fstat-l">Выручка</div><div class="fstat-v" style="color:#f0c040">₪' + f"{wf_rev:,.0f}" + " " + delta_wf_rev + '</div></div></div>') if wf_total > 0 else ""}
   <div class="fn">{working_funnel_html}</div>
 </div>
 
 <div class="sec">Постоянные клиенты</div>
 <div class="fcard">
-  {f"""<div class="fstats">
-    <div class="fstat"><div class="fstat-l">Всего</div><div class="fstat-v">{pf_total} {delta_pf_total}</div></div>
-    <div class="fstat"><div class="fstat-l">Выполнено</div><div class="fstat-v" style="color:#22c55e">{pf.get("won", 0) if pf else 0} {delta_pf_won}</div></div>
-    <div class="fstat"><div class="fstat-l">Выручка</div><div class="fstat-v" style="color:#a855f7">₪{pf_rev:,.0f} {delta_pf_rev}</div></div>
-  </div>""" if pf_total > 0 else ""}
+  {('<div class="fstats"><div class="fstat"><div class="fstat-l">Всего</div><div class="fstat-v">' + str(pf_total) + " " + delta_pf_total + '</div></div><div class="fstat"><div class="fstat-l">Выполнено</div><div class="fstat-v" style="color:#22c55e">' + str(pf.get("won", 0) if pf else 0) + " " + delta_pf_won + '</div></div><div class="fstat"><div class="fstat-l">Выручка</div><div class="fstat-v" style="color:#a855f7">₪' + f"{pf_rev:,.0f}" + " " + delta_pf_rev + '</div></div></div>') if pf_total > 0 else ""}
   <div class="fn">{permanent_funnel_html}</div>
 </div>
 
@@ -2749,16 +2743,16 @@ def generate_campaign_dashboard_png(campaign_data, meta_data, period_label, prev
         c1, c2 = STAGE_COLORS.get(stage_name, ("#6366f1", "#818cf8"))
         is_stuck = any(w in stage_name.lower() for w in ["работу", "повторно", "неразобр"])
         stuck_badge = '<span class="stuck-badge">⚠ ждут</span>' if is_stuck else ""
-        stages_html += f'''
-        <div class="stage-row">
-          <div class="stage-label">{stage_name}{stuck_badge}</div>
-          <div class="stage-bar-wrap">
-            <div class="stage-bar" style="width:{bar_w}%;background:linear-gradient(90deg,{c1},{c2})">
-              <span class="stage-count">{count}</span>
-            </div>
-          </div>
-          <div class="stage-pct">{pct_of_total}%</div>
-        </div>'''
+        stages_html += (
+            '<div class="stage-row">'
+            f'<div class="stage-label">{stage_name}{stuck_badge}</div>'
+            '<div class="stage-bar-wrap">'
+            f'<div class="stage-bar" style="width:{bar_w}%;background:linear-gradient(90deg,{c1},{c2})">'
+            f'<span class="stage-count">{count}</span>'
+            '</div></div>'
+            f'<div class="stage-pct">{pct_of_total}%</div>'
+            '</div>'
+        )
 
     stuck_total = sum(c for s, c in stages if any(w in s.lower() for w in ["работу", "повторно", "неразобр"]))
     stuck_block = f'<div class="stuck-alert">⚠️ {stuck_total} лидов зависли и ждут обработки</div>' if stuck_total > 0 else ""
