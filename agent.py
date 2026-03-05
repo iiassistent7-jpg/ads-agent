@@ -26,6 +26,9 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 AMOCRM_DOMAIN = os.environ.get("AMOCRM_DOMAIN", "istudiomkac.amocrm.ru")
 AMOCRM_TOKEN = os.environ.get("AMOCRM_TOKEN", "")
 
+# Wazzup24 config (for WhatsApp/Instagram chat history)
+WAZZUP_API_KEY = os.environ.get("WAZZUP_API_KEY", "")
+
 ISRAEL_UTC_OFFSET = 2
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -655,15 +658,128 @@ def get_contact_notes(contact_id):
         "tags": tags,
     }
 
-def get_contact_conversations(contact_id, lead_ids=None):
+def get_wazzup_messages(phones, limit=100):
     """
-    Fetch chat messages from amoCRM via all possible Wazzup/integration endpoints.
-    Wazzup stores messages as notes with specific note_types OR via /talks API.
+    Fetch chat messages from Wazzup24 API by phone numbers.
+    Wazzup API docs: https://wazzup24.com/api/
+    """
+    if not WAZZUP_API_KEY:
+        print("Wazzup API key not configured (WAZZUP_API_KEY)")
+        return []
+
+    from datetime import datetime as _dt
+    messages = []
+
+    headers = {
+        "Authorization": f"Bearer {WAZZUP_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    # Normalize phones for search
+    import re as _re
+    search_phones = set()
+    for p in phones:
+        digits = _re.sub(r"[^\d]", "", p)
+        search_phones.add(digits)
+        if digits.startswith("972"):
+            search_phones.add("0" + digits[3:])
+        elif digits.startswith("0") and len(digits) == 10:
+            search_phones.add("972" + digits[1:])
+
+    # Try each phone variant to find the chat
+    for phone in search_phones:
+        try:
+            # Get contacts list from Wazzup
+            resp = requests.get(
+                f"https://api.wazzup24.com/v3/contacts",
+                headers=headers,
+                params={"phone": phone},
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                print(f"Wazzup contacts error {resp.status_code} for {phone}")
+                continue
+
+            contacts = resp.json().get("contacts") or []
+            for wc in contacts:
+                chat_id = wc.get("chatId") or wc.get("id")
+                channel_id = wc.get("channelId")
+                if not chat_id:
+                    continue
+
+                # Get messages for this chat
+                msgs_resp = requests.get(
+                    f"https://api.wazzup24.com/v3/messages",
+                    headers=headers,
+                    params={"chatId": chat_id, "channelId": channel_id, "count": limit},
+                    timeout=15,
+                )
+                if msgs_resp.status_code != 200:
+                    continue
+
+                for m in (msgs_resp.json().get("messages") or []):
+                    ts = m.get("timestamp") or m.get("dateTime") or 0
+                    text = m.get("text") or m.get("body") or m.get("caption") or ""
+                    msg_type = m.get("type","")
+                    sender = m.get("senderName") or m.get("author") or ""
+                    incoming = m.get("incoming", True)
+
+                    # Determine channel
+                    channel_type = wc.get("channelType","").lower()
+                    if "instagram" in channel_type:
+                        channel = "Instagram"
+                    elif "whatsapp" in channel_type or "wazzup" in channel_type:
+                        channel = "WhatsApp"
+                    elif "facebook" in channel_type:
+                        channel = "Facebook"
+                    else:
+                        channel = channel_type or "chat"
+
+                    direction = "👤 Клиент" if incoming else "💼 Менеджер"
+
+                    if text:
+                        dt_str = _dt.fromtimestamp(ts).strftime("%d.%m.%Y %H:%M") if ts else ""
+                        messages.append({
+                            "date": dt_str,
+                            "direction": direction,
+                            "channel": channel,
+                            "text": text[:600],
+                            "ts": ts,
+                        })
+
+        except Exception as e:
+            print(f"Wazzup fetch error for {phone}: {e}")
+
+    # Sort and deduplicate
+    seen = set()
+    unique = []
+    for m in messages:
+        key = (m.get("ts"), m.get("text","")[:40])
+        if key not in seen:
+            seen.add(key)
+            unique.append(m)
+
+    unique.sort(key=lambda x: x.get("ts", 0))
+    for m in unique: m.pop("ts", None)
+    print(f"Wazzup: found {len(unique)} messages for phones {list(search_phones)[:3]}")
+    return unique
+
+
+def get_contact_conversations(contact_id, lead_ids=None, all_phones=None):
+    """
+    Fetch chat messages. Tries Wazzup API first (WhatsApp/Instagram),
+    then amoCRM notes as fallback.
     """
     from datetime import datetime as _dt
     messages = []
 
-    # 1. Try /talks API (amoCRM native chats, newer API)
+    # 1. Try Wazzup API directly (most reliable for WhatsApp/Instagram)
+    if WAZZUP_API_KEY and all_phones:
+        wz_msgs = get_wazzup_messages(all_phones)
+        if wz_msgs:
+            return wz_msgs
+
+    # 2. Try amoCRM /talks API
     talks_data = amocrm_request(f"talks?contact_id={contact_id}&limit=100")
     if talks_data:
         for talk in (talks_data.get("_embedded") or {}).get("talks") or []:
@@ -874,7 +990,11 @@ def analyze_client(query):
     total_deals  = len(deals_summary)
     won_deals    = sum(1 for d in deals_summary if d.get("status_id") in (52041937, 70503946))
 
-    contact_notes = get_contact_conversations(contact["id"], lead_ids=lead_ids[:5])
+    contact_notes = get_contact_conversations(
+        contact["id"],
+        lead_ids=lead_ids[:5],
+        all_phones=contact.get("all_phones", [])
+    )
 
     return {
         "contact": contact,
