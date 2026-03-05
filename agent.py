@@ -416,7 +416,312 @@ def get_amocrm_contacts(contact_ids):
         time.sleep(0.3)
     return contacts
 
-def get_deal_tags(deal):
+def find_contact_by_phone(phone):
+    """Search amoCRM contact by phone number. Returns contact dict or None."""
+    # Normalize: strip spaces, dashes, keep digits and leading +
+    import re
+    digits = re.sub(r"[^\d+]", "", phone.strip())
+    # Try with and without country code
+    variants = [digits]
+    if digits.startswith("+"):
+        variants.append(digits[1:])  # without +
+    if digits.startswith("972"):
+        variants.append("0" + digits[3:])  # Israeli local format
+    if digits.startswith("0") and len(digits) == 10:
+        variants.append("+972" + digits[1:])
+
+    for q in variants:
+        data = amocrm_request(f"contacts?query={q}&with=leads")
+        if data:
+            contacts = (data.get("_embedded") or {}).get("contacts") or []
+            if contacts:
+                c = contacts[0]
+                phone_val = ""
+                for cf in (c.get("custom_fields_values") or []):
+                    if cf.get("field_code") == "PHONE":
+                        vals = cf.get("values") or []
+                        if vals: phone_val = vals[0].get("value", "")
+                lead_ids = [
+                    lnk["id"] for lnk in
+                    ((c.get("_embedded") or {}).get("leads") or [])
+                ]
+                return {
+                    "id": c["id"],
+                    "name": c.get("name", "Без имени"),
+                    "phone": phone_val or phone,
+                    "lead_ids": lead_ids,
+                }
+    return None
+
+def get_deal_notes(deal_id):
+    """Fetch all notes/events for a deal including WhatsApp & Instagram DM messages."""
+    notes = []
+    # Fetch both deal notes and contact notes (messages often attach to contact)
+    data = amocrm_request(f"leads/{deal_id}/notes?limit=250")
+    if not data:
+        return notes
+
+    from datetime import datetime as _dt
+
+    # Note types in amoCRM integrations:
+    # "common"            — manual manager note
+    # "call_in/call_out"  — phone call
+    # "service_message"   — system event (stage change etc.)
+    # "amocrm_bot"        — chatbot message
+    # "sms"               — SMS
+    # Wazzup/WhatsApp integration stores as note_type "common" with direction field
+    # OR as custom type "wazzup" / "whatsapp" / "instagram_direct"
+    # Some integrations use params.income (true=incoming from client)
+
+    TYPE_LABELS = {
+        "common": "📝 Заметка",
+        "call_in": "📞 Входящий звонок",
+        "call_out": "📞 Исходящий звонок",
+        "service_message": "⚙️ Система",
+        "amocrm_bot": "🤖 Бот",
+        "sms": "💬 SMS",
+        "wazzup": "💬 WhatsApp",
+        "whatsapp": "💬 WhatsApp",
+        "instagram_direct": "📸 Instagram DM",
+        "telegram": "✈️ Telegram",
+    }
+
+    for n in (data.get("_embedded") or {}).get("notes") or []:
+        note_type = n.get("note_type", "")
+        params = n.get("params") or {}
+        created = n.get("created_at", 0)
+        dt_str = _dt.fromtimestamp(created).strftime("%d.%m.%Y %H:%M") if created else ""
+
+        # Extract text from all possible fields
+        text = (
+            params.get("text") or
+            params.get("message") or
+            params.get("body") or
+            params.get("content") or
+            ""
+        )
+
+        # Direction: who wrote — client or manager
+        income = params.get("income")  # True = incoming (from client)
+        if income is True:
+            direction = "👤 Клиент"
+        elif income is False:
+            direction = "💼 Менеджер"
+        else:
+            direction = ""
+
+        # Skip empty service messages and stage-change noise
+        if not text and note_type == "service_message":
+            continue
+
+        if text or note_type in ("call_in", "call_out"):
+            label = TYPE_LABELS.get(note_type, f"[{note_type}]")
+            notes.append({
+                "type": note_type,
+                "label": label,
+                "direction": direction,
+                "text": text[:800] if text else "(звонок)",
+                "date": dt_str,
+                "raw": n,
+            })
+
+    # Sort chronologically
+    notes.sort(key=lambda x: x["raw"].get("created_at", 0))
+    # Remove raw field before returning
+    for n in notes:
+        n.pop("raw", None)
+
+    return notes
+
+def get_contact_notes(contact_id):
+    """Fetch notes attached directly to the contact (WhatsApp/Instagram often here)."""
+    notes = []
+    data = amocrm_request(f"contacts/{contact_id}/notes?limit=250")
+    if not data:
+        return notes
+
+    from datetime import datetime as _dt
+    TYPE_LABELS = {
+        "common": "📝 Заметка", "call_in": "📞 Входящий", "call_out": "📞 Исходящий",
+        "service_message": "⚙️ Система", "amocrm_bot": "🤖 Бот", "sms": "💬 SMS",
+        "wazzup": "💬 WhatsApp", "whatsapp": "💬 WhatsApp",
+        "instagram_direct": "📸 Instagram DM", "telegram": "✈️ Telegram",
+    }
+
+    for n in (data.get("_embedded") or {}).get("notes") or []:
+        note_type = n.get("note_type", "")
+        params = n.get("params") or {}
+        created = n.get("created_at", 0)
+        dt_str = _dt.fromtimestamp(created).strftime("%d.%m.%Y %H:%M") if created else ""
+        text = params.get("text") or params.get("message") or params.get("body") or params.get("content") or ""
+        income = params.get("income")
+        direction = "👤 Клиент" if income is True else ("💼 Менеджер" if income is False else "")
+        if not text and note_type == "service_message":
+            continue
+        if text or note_type in ("call_in", "call_out"):
+            label = TYPE_LABELS.get(note_type, f"[{note_type}]")
+            notes.append({
+                "type": note_type, "label": label, "direction": direction,
+                "text": text[:800] if text else "(звонок)", "date": dt_str,
+                "ts": created,
+            })
+
+    notes.sort(key=lambda x: x.get("ts", 0))
+    for n in notes: n.pop("ts", None)
+    return notes
+    """Fetch full deal details including custom fields."""
+    data = amocrm_request(f"leads/{deal_id}?with=contacts,tags")
+    if not data:
+        return {}
+    cf = {}
+    for field in (data.get("custom_fields_values") or []):
+        fname = field.get("field_name", "")
+        vals = field.get("values") or []
+        if fname and vals:
+            val = vals[0].get("value")
+            if isinstance(val, int) and val > 1000000000:
+                from datetime import datetime as _dt
+                try: val = _dt.fromtimestamp(val).strftime("%d.%m.%Y %H:%M")
+                except: pass
+            cf[fname] = val
+    tags = [t.get("name","") for t in (data.get("_embedded") or {}).get("tags") or []]
+    return {
+        "id": deal_id,
+        "name": data.get("name",""),
+        "price": data.get("price", 0),
+        "status_id": data.get("status_id"),
+        "pipeline_id": data.get("pipeline_id"),
+        "created_at": data.get("created_at", 0),
+        "closed_at": data.get("closed_at", 0),
+        "custom_fields": cf,
+        "tags": tags,
+    }
+
+def analyze_client_by_phone(phone):
+    """Full client profile: find by phone → get all deals → get notes → AI analysis."""
+    contact = find_contact_by_phone(phone)
+    if not contact:
+        return {"error": f"Контакт с номером {phone} не найден в amoCRM"}
+
+    lead_ids = contact.get("lead_ids", [])
+    if not lead_ids:
+        return {"error": f"У контакта {contact['name']} ({phone}) нет сделок в amoCRM"}
+
+    # Fetch all deals with notes
+    deals_data = []
+    for lid in lead_ids[:10]:
+        deal = get_deal_full(lid)
+        if deal:
+            notes = get_deal_notes(lid)
+            deal["notes"] = notes
+            deals_data.append(deal)
+        time.sleep(0.2)
+
+    # Also fetch notes attached directly to the contact (WhatsApp/Instagram DM)
+    contact_notes = get_contact_notes(contact["id"])
+
+    return {
+        "contact": contact,
+        "deals": deals_data,
+        "contact_notes": contact_notes,
+        "total_deals": len(deals_data),
+        "total_spent": sum(d.get("price", 0) for d in deals_data if d.get("price")),
+    }
+
+def format_client_profile(data, stage_map=None):
+    """Send client data to Claude for psychological profile + recommendations."""
+    if "error" in data:
+        return f"❌ {data['error']}"
+
+    contact = data["contact"]
+    deals = data["deals"]
+
+    deals_text = ""
+    for i, d in enumerate(deals, 1):
+        cf_str = "\n".join(f"    {k}: {v}" for k, v in d.get("custom_fields", {}).items())
+
+        # Format notes with direction labels
+        notes = d.get("notes", [])
+        if notes:
+            notes_str = ""
+            for n in notes:
+                direction = f" [{n['direction']}]" if n.get("direction") else ""
+                notes_str += f"    [{n['date']}] {n['label']}{direction}: {n['text']}\n"
+        else:
+            notes_str = "    — заметок нет"
+
+        from datetime import datetime as _dt
+        created_str = _dt.fromtimestamp(d["created_at"]).strftime("%d.%m.%Y") if d.get("created_at") else "?"
+
+        deals_text += f"""
+Сделка {i} (создана {created_str}):
+  Цена: ₪{d.get('price', 0)}
+  Теги: {', '.join(d.get('tags', [])) or '—'}
+  Доп.поля:
+{cf_str or '    —'}
+  История переписки и заметки:
+{notes_str}"""
+
+    contact_notes = data.get("contact_notes", [])
+    contact_chat = ""
+    if contact_notes:
+        contact_chat = "\nПЕРЕПИСКА (привязана к контакту — WhatsApp/Instagram):\n"
+        for n in contact_notes:
+            direction = f" [{n['direction']}]" if n.get("direction") else ""
+            contact_chat += f"  [{n['date']}] {n['label']}{direction}: {n['text']}\n"
+
+    prompt = f"""ДАННЫЕ КЛИЕНТА iStudio:
+Имя: {contact['name']}
+Телефон: {contact['phone']}
+Всего сделок в CRM: {data['total_deals']}
+Общая сумма выполненных процедур: ₪{data['total_spent']}
+{contact_chat}
+{deals_text}
+
+---
+Сделай глубокий анализ клиента по разделам. Опирайся ТОЛЬКО на реальные данные выше — не выдумывай.
+
+1. ПРОФИЛЬ
+Кто клиент: язык, процедуры, сколько раз приходил, сколько потратил.
+
+2. ПОВЕДЕНИЕ В ВОРОНКЕ
+Как быстро движется от заявки до записи? Нужно ли его "дожимать"? Сколько касаний было до закрытия?
+
+3. ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ (по переписке и заметкам)
+Что важно для этого клиента — цена, результат, доверие, скорость? Как он общается — коротко/подробно, активно/пассивно? Есть ли возражения, сомнения? Тональность переписки.
+
+4. ИСТОРИЯ
+Хронология: когда пришёл первый раз, что делал, динамика отношений.
+
+5. РЕКОМЕНДАЦИИ МЕНЕДЖЕРУ
+Конкретно: как закрыть следующую сделку с этим клиентом, что предложить, чего избегать, когда лучше написать.
+
+Пиши коротко и по делу. Максимум 2000 символов."""
+
+    try:
+        response = call_claude(ANALYST_PROMPT, prompt, max_tokens=2000)
+        # Count messages
+        total_msgs = sum(len(d.get("notes", [])) for d in deals)
+        wa_msgs = sum(1 for d in deals for n in d.get("notes", []) if "whatsapp" in n.get("type","").lower() or "wazzup" in n.get("type","").lower())
+        ig_msgs = sum(1 for d in deals for n in d.get("notes", []) if "instagram" in n.get("type","").lower())
+
+        channels = []
+        if wa_msgs: channels.append(f"WhatsApp: {wa_msgs}")
+        if ig_msgs: channels.append(f"Instagram: {ig_msgs}")
+        ch_str = " | ".join(channels) if channels else f"заметок: {total_msgs}"
+
+        header = (
+            f"👤 {contact['name']}\n"
+            f"📱 {contact['phone']}\n"
+            f"💰 Потрачено: ₪{data['total_spent']} | Сделок: {data['total_deals']}\n"
+            f"💬 Сообщений: {ch_str}\n"
+            f"{'—'*30}\n\n"
+        )
+        return header + response
+    except Exception as e:
+        return f"❌ Ошибка анализа: {e}"
+
+
     tags = (deal.get("_embedded") or {}).get("tags") or []
     return [t.get("name", "") for t in tags]
 
@@ -702,22 +1007,34 @@ def analyze_campaign_funnel(campaign_tag, since=None, until=None):
         "Закрыто и не реализовано",
     ]
 
-    # Find matching deals (fuzzy match on campaign_tag)
+    # Find matching deals — fuzzy multi-word match
     tag_lower = campaign_tag.lower().strip()
-    matched = [
-        d for d in deal_details
-        if d.get("campaign_tag") and tag_lower in d["campaign_tag"].lower()
-    ]
+    search_words = [w for w in tag_lower.split() if len(w) > 2]  # e.g. ["карбон", "ивр"]
+
+    def deal_matches(d):
+        ct = (d.get("campaign_tag") or "").lower()
+        ft = (d.get("fb_tag") or "").lower()
+        # Full string match
+        if tag_lower in ct or tag_lower in ft:
+            return True
+        # All words present in campaign_tag
+        if search_words and all(w in ct for w in search_words):
+            return True
+        # Any single keyword match (for short queries like "карбон")
+        if len(search_words) == 1 and search_words[0] in ct:
+            return True
+        return False
+
+    matched = [d for d in deal_details if deal_matches(d)]
 
     if not matched:
-        # Try matching by fb_tag
-        matched = [
-            d for d in deal_details
-            if d.get("fb_tag") and tag_lower in d["fb_tag"].lower()
-        ]
-
-    if not matched:
-        return {"error": f"Кампания '{campaign_tag}' не найдена в данных за период"}
+        # Show available tags to help user
+        available = sorted(set(
+            d.get("campaign_tag") for d in deal_details
+            if d.get("campaign_tag")
+        ))
+        hint = "\n".join(f"• {t}" for t in available[:8]) if available else "нет тегированных сделок"
+        return {"error": f"Кампания '{campaign_tag}' не найдена.\n\nДоступные теги за период:\n{hint}"}
 
     # Count by stage
     stage_counts = {}
@@ -1344,8 +1661,9 @@ INTENT_PROMPT = """Парсер запросов рекламного/CRM бот
 {"period": "month", "show": "spend", "custom_dates": null}
 
 period: today | yesterday | week | month | 3months | 6months | year | all | custom
-show: spend | all_campaigns | crm | roi | ltv | funnel | golden | full_report | budget_advice | dead_campaigns | best_source | branch_compare | dashboard | campaign_funnel
-campaign_tag: (только для campaign_funnel) название кампании или fb-тег, например "Карбон ИВР" или "fb1428525824956091"
+show: spend | all_campaigns | crm | roi | ltv | funnel | golden | full_report | budget_advice | dead_campaigns | best_source | branch_compare | dashboard | campaign_funnel | client_profile
+campaign_tag: (только для campaign_funnel) название кампании или fb-тег
+phone: (только для client_profile) номер телефона клиента
 custom_dates: null или {"since": "YYYY-MM-DD", "until": "YYYY-MM-DD"} — ОБЯЗАТЕЛЬНО вычисли даты если указан конкретный период
 
 ПРАВИЛА ДЛЯ ПЕРИОДОВ:
@@ -1372,6 +1690,9 @@ CRM и продажи:
 - "crm", "срм", "клиенты", "сделки", "амо", "продажи" → crm
 - "воронка", "конверсия", "потери", "где теряем", "куда уходят" → funnel
 - "воронка по [кампании]", "где лиды с [тег]", "куда делись лиды карбон", "путь лидов", "где зависли лиды" → campaign_funnel + извлеки название кампании в поле "campaign_tag"
+
+Анализ клиента:
+- "кто такой +972...", "анализ клиента [телефон]", "профиль клиента [номер]", "расскажи о клиенте [номер]", "что знаешь о [телефон]" → client_profile + извлеки номер телефона в поле "phone"
 
 Окупаемость:
 - "roi", "рои", "окупаемость", "что окупается", "что работает", "что приносит деньги" → roi
@@ -2531,17 +2852,23 @@ def _handle_show(show, since, until, user_text, period=None, intent=None):
     if show == "campaign_funnel":
         campaign_tag = (intent or {}).get("campaign_tag", "")
         if not campaign_tag:
-            for word in ["карбон", "bbl", "эпил", "вект", "зима", "лето", "пилинг"]:
+            for word in ["карбон", "bbl", "эпил", "вект", "зима", "лето", "пилинг", "ббл"]:
                 if word in user_text.lower():
                     campaign_tag = word
                     break
         if not campaign_tag:
             safe_send(MY_CHAT_ID, "❓ Укажи название кампании, например:\n'дашборд карбон ИВР'\n'воронка по BBL'")
             return
+
+        # Default to month if period is today (campaign data needs longer window)
+        eff_since, eff_until = since, until
+        if period in ("today", None) and not (intent or {}).get("custom_dates"):
+            eff_since, eff_until = get_date_range("month")
+
         safe_send(MY_CHAT_ID, f"📊 Строю дашборд кампании: {campaign_tag}...\n⏳")
 
         # Fetch current campaign funnel data
-        camp_data = analyze_campaign_funnel(campaign_tag, since, until)
+        camp_data = analyze_campaign_funnel(campaign_tag, eff_since, eff_until)
         if "error" in camp_data:
             safe_send(MY_CHAT_ID, f"❌ {camp_data['error']}")
             return
@@ -2549,14 +2876,14 @@ def _handle_show(show, since, until, user_text, period=None, intent=None):
         # Fetch Meta spend data for this campaign tag
         meta_camp = {}
         try:
-            crm_raw = analyze_crm_data(since, until)
+            crm_raw = analyze_crm_data(eff_since, eff_until)
             bt = crm_raw.get("by_campaign_tag", {})
             for k, v in bt.items():
                 if campaign_tag.lower() in k.lower():
                     meta_camp = {"spend": v.get("spend", 0), "leads": v.get("deals", 0), "cpl": v.get("avg_deal", 0)}
                     break
             # Try Meta data
-            roi = analyze_campaign_roi(since, until)
+            roi = analyze_campaign_roi(eff_since, eff_until)
             if roi and "campaigns" in roi:
                 for c in roi["campaigns"]:
                     if campaign_tag.lower() in c.get("name", "").lower():
@@ -2568,13 +2895,12 @@ def _handle_show(show, since, until, user_text, period=None, intent=None):
         # Fetch previous period for deltas
         prev_camp = {}
         try:
-            ps, pu = get_previous_period(since, until)
+            ps, pu = get_previous_period(eff_since, eff_until)
             prev_raw = analyze_campaign_funnel(campaign_tag, ps, pu)
             if "error" not in prev_raw:
                 prev_camp = prev_raw
                 prev_camp["since"] = ps
                 prev_camp["until"] = pu
-                # Try prev Meta spend
                 prev_roi = analyze_campaign_roi(ps, pu)
                 if prev_roi and "campaigns" in prev_roi:
                     for c in prev_roi["campaigns"]:
@@ -2587,7 +2913,7 @@ def _handle_show(show, since, until, user_text, period=None, intent=None):
             print(f"Prev period fetch for campaign dashboard: {e}")
 
         period_names = {"today":"Сегодня","yesterday":"Вчера","week":"Неделя","month":"Месяц","3months":"3 месяца","6months":"Полгода","year":"Год"}
-        plabel = period_names.get(period, f"{since} — {until}") if period else f"{since} — {until}"
+        plabel = period_names.get(period, f"{eff_since} — {eff_until}") if period not in ("today", None) else f"{eff_since} — {eff_until}"
 
         png_path = generate_campaign_dashboard_png(camp_data, meta_camp, plabel, prev_camp or None)
         with open(png_path, 'rb') as photo:
@@ -2597,7 +2923,20 @@ def _handle_show(show, since, until, user_text, period=None, intent=None):
         # Also send text summary
         safe_send(MY_CHAT_ID, format_campaign_funnel(camp_data))
         return
-    elif show == "all_campaigns":
+    elif show == "client_profile":
+        phone = (intent or {}).get("phone", "")
+        if not phone:
+            # Try to extract phone from user text
+            import re
+            m = re.search(r"[\+\d][\d\s\-\(\)]{7,}", user_text)
+            if m:
+                phone = re.sub(r"[\s\-\(\)]", "", m.group())
+        if not phone:
+            safe_send(MY_CHAT_ID, "❓ Укажи номер телефона клиента, например:\n'профиль клиента +972501234567'")
+            return
+        safe_send(MY_CHAT_ID, f"🔍 Ищу клиента {phone} в amoCRM...\n⏳")
+        data = analyze_client_by_phone(phone)
+        safe_send(MY_CHAT_ID, format_client_profile(data))
         data = fetch_all_campaigns_list()
         safe_send(MY_CHAT_ID, generate_response(user_text, data))
     elif show == "crm":
