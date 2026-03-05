@@ -971,7 +971,11 @@ def analyze_client(query):
         history_lines.append(f"  {ym}: {v['count']} сделок{rev}")
     history_summary = "\n".join(history_lines)
 
-    total_spent  = sum(d.get("price", 0) for d in deals_summary if d.get("price") and d.get("status_id") in (52041937, 70503946))
+    # Revenue: sum ALL deals with price > 0 (packs, single payments, etc.)
+    # Don't filter by status_id — iStudio uses various statuses for completed procedures
+    LOST_IDS = {143}  # Only exclude "Закрыто и не реализовано"
+    total_spent  = sum(d.get("price", 0) or 0 for d in deals_summary
+                       if (d.get("price") or 0) > 0 and d.get("status_id") not in LOST_IDS)
     total_deals  = len(deals_summary)
     won_deals    = sum(1 for d in deals_summary if d.get("status_id") in (52041937, 70503946))
 
