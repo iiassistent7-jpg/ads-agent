@@ -325,7 +325,7 @@ def enrich_insights(insights):
 # ============================================================
 # amoCRM API
 # ============================================================
-def amocrm_request(endpoint, params=None):
+def amocrm_request(endpoint, params=None, method="GET"):
     if not AMOCRM_TOKEN:
         print("amoCRM token not configured")
         return None
@@ -337,8 +337,11 @@ def amocrm_request(endpoint, params=None):
             return {"_embedded": {}}
         if resp.status_code == 200:
             return resp.json()
+        elif resp.status_code == 403:
+            print(f"amoCRM 403 scope error on [{endpoint[:80]}] — skipping")
+            return None  # graceful skip, not an error
         else:
-            print(f"amoCRM error {resp.status_code}: {resp.text[:200]}")
+            print(f"amoCRM error {resp.status_code} on [{endpoint[:80]}]: {resp.text[:150]}")
             return None
     except Exception as e:
         print(f"amoCRM request error: {e}")
