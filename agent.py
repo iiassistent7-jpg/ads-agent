@@ -695,7 +695,12 @@ def get_wazzup_messages(phones, limit=100):
         if ch_resp.status_code != 200:
             print(f"Wazzup channels error: {ch_resp.text[:200]}")
             return []
-        channels = ch_resp.json().get("channels") or []
+        channels_resp = ch_resp.json()
+        # Wazzup returns either {"channels": [...]} or directly [...]
+        if isinstance(channels_resp, list):
+            channels = channels_resp
+        else:
+            channels = channels_resp.get("channels") or []
         print(f"Wazzup: found {len(channels)} channels")
     except Exception as e:
         print(f"Wazzup channels fetch error: {e}")
@@ -930,29 +935,66 @@ def analyze_client(query):
 
     print(f"Client {contact['name']} has {len(lead_ids)} deals total")
 
+    # Fetch ALL deals for stats (up to 200)
     deals_summary = []
-    for lid in lead_ids[:60]:
+    for lid in lead_ids[:200]:
         d = get_deal_full(lid)
         if d:
             deals_summary.append(d)
-        time.sleep(0.15)
+        time.sleep(0.1)
 
-    recent_ids = lead_ids[:15]
+    # Sort newest first
+    deals_summary.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+
+    # Detailed notes only for 10 most recent deals
     deals_detailed = []
-    for lid in recent_ids:
-        d = next((x for x in deals_summary if x["id"] == lid), get_deal_full(lid))
-        if d:
-            notes = get_deal_notes(lid)
-            d["notes"] = notes
-            deals_detailed.append(d)
+    for d in deals_summary[:10]:
+        notes = get_deal_notes(d["id"])
+        d["notes"] = notes
+        deals_detailed.append(d)
+
+    # Full history summary by year/month for prompt
+    from collections import defaultdict as _dd
+    by_month = _dd(lambda: {"count": 0, "revenue": 0})
+    for d in deals_summary:
+        ts = d.get("created_at", 0)
+        if ts:
+            from datetime import datetime as _dt2
+            dt = _dt2.fromtimestamp(ts)
+            key = dt.strftime("%Y-%m")
+            by_month[key]["count"] += 1
+            by_month[key]["revenue"] += d.get("price", 0) or 0
+    history_lines = []
+    for ym in sorted(by_month.keys()):
+        v = by_month[ym]
+        rev = f" | ₪{v['revenue']:,.0f}" if v["revenue"] else ""
+        history_lines.append(f"  {ym}: {v['count']} сделок{rev}")
+    history_summary = "\n".join(history_lines)
 
     total_spent  = sum(d.get("price", 0) for d in deals_summary if d.get("price") and d.get("status_id") in (52041937, 70503946))
     total_deals  = len(deals_summary)
     won_deals    = sum(1 for d in deals_summary if d.get("status_id") in (52041937, 70503946))
 
+    # Source: find fb_tag / campaign_tag from any deal
+    source_tag = None
+    source_campaign = None
+    for d in reversed(deals_summary):  # oldest deal = original source
+        tags = d.get("tags", [])
+        for t in tags:
+            tl = t.lower()
+            if tl.startswith("fb") and len(t) > 3:
+                source_tag = t
+                break
+            if source_tag:
+                break
+        for t in tags:
+            if not t.lower().startswith("fb") and len(t) > 2:
+                source_campaign = t
+                break
+
     contact_notes = get_contact_conversations(
         contact["id"],
-        lead_ids=lead_ids[:5],
+        lead_ids=[d["id"] for d in deals_detailed[:5]],
         all_phones=contact.get("all_phones", [])
     )
 
@@ -967,6 +1009,9 @@ def analyze_client(query):
         "contact_notes": contact_notes,
         "total_deals": total_deals,
         "total_spent": total_spent,
+        "source_tag": source_tag,
+        "source_campaign": source_campaign,
+        "history_summary": history_summary,
     }
 
 # Keep old name as alias for backwards compat
@@ -984,6 +1029,16 @@ def format_client_profile(data, stage_map=None):
     card_status = data.get("card_status")
     card_gender = data.get("card_gender")
     all_phones  = contact.get("all_phones", [contact.get("phone","")])
+    source_tag  = data.get("source_tag")
+    source_campaign = data.get("source_campaign")
+
+    # Source label
+    if source_tag:
+        source_str = f"Реклама Meta (тег: {source_tag}" + (f", кампания: {source_campaign}" if source_campaign else "") + ")"
+    elif source_campaign:
+        source_str = f"Кампания: {source_campaign}"
+    else:
+        source_str = "Источник неизвестен (нет fb-тега)"
 
     # Card-level extra info
     card_info = ""
@@ -1040,10 +1095,19 @@ def format_client_profile(data, stage_map=None):
             channel = f"[{n['channel']}]" if n.get("channel") else ""
             contact_chat += f"  {n['date']} {channel}{direction}: {n['text']}\n"
 
+    history_summary = data.get("history_summary", "")
+
     prompt = f"""ДАННЫЕ КЛИЕНТА iStudio:
 Имя: {contact['name']}
 Телефоны: {', '.join(all_phones)}
+Источник: {source_str}
 Всего сделок в CRM: {data['all_deals_count']} (из них выполнено: {data['won_deals_count']})
+Общая выручка (только выполненные): ₪{data['total_spent']}
+
+ИСТОРИЯ ПО МЕСЯЦАМ (вся):
+{history_summary or '— нет данных'}
+
+ДАННЫЕ ИЗ КАРТОЧКИ КОНТАКТА:
 Общая выручка (только выполненные): ₪{data['total_spent']}
 
 ДАННЫЕ ИЗ КАРТОЧКИ КОНТАКТА:
@@ -1093,6 +1157,7 @@ def format_client_profile(data, stage_map=None):
         header = (
             f"👤 {contact['name']}{status_str}\n"
             f"📱 {phones_str}\n"
+            f"📣 {source_str}\n"
             f"💰 Выручка: ₪{data['total_spent']}{visits_str}\n"
             f"📋 Всего сделок: {data['all_deals_count']}\n"
             f"💬 Сообщений: {ch_str}\n"
