@@ -377,7 +377,7 @@ def get_amocrm_pipelines():
 def get_all_amocrm_deals(max_pages=30, date_filter=None):
     all_deals = []
     for page in range(1, max_pages + 1):
-        params = {"limit": 250, "page": page, "with": "contacts"}
+        params = {"limit": 250, "page": page, "with": "contacts,tags"}
         if date_filter:
             params["filter[created_at][from]"] = date_filter.get("from", 0)
             params["filter[created_at][to]"] = date_filter.get("to", 0)
