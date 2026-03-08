@@ -2364,7 +2364,9 @@ def send_weekly_crm_report():
         report = generate_response("еженедельный полный отчёт по рекламе и CRM", data, "full_report")
         safe_send(MY_CHAT_ID, report)
     except Exception as e:
-        print(f"Weekly report error: {e}")
+        import traceback
+        err = traceback.format_exc()
+        print(f"Weekly report error: {err}")
         safe_send(MY_CHAT_ID, f"❌ Ошибка еженедельного отчёта: {e}")
 
 # ============================================================
