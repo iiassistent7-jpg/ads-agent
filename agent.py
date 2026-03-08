@@ -2079,19 +2079,26 @@ def format_report(data):
         header += f" — {until}"
     header += ")\n" + f"{'─' * 30}\n\n"
 
+    # Sort by spend descending, show all active campaigns
+    sorted_camps = sorted(campaigns, key=lambda c: c["spend"], reverse=True)
+    total_spend = sum(c["spend"] for c in campaigns)
+
     body = ""
-    total_spend = 0
-    for c in campaigns:
-        total_spend += c["spend"]
+    for c in sorted_camps:
         emoji = "🟢" if c["actions"] else "🔴"
+        # Compact format: one line per campaign + actions
+        actions_str = " | ".join(
+            f"{a['label']}: {a['count']} (${a['cost_per']:.2f}/шт)" if a["cost_per"] > 0
+            else f"{a['label']}: {a['count']}"
+            for a in c["actions"]
+        )
         body += f"{emoji} {c['campaign_name']}\n"
-        body += f"   💰 ${c['spend']:.2f} | 👁 {c['impressions']:,} показов\n"
-        body += f"   🖱 {c['clicks']} кликов | CTR {c['ctr']:.2f}% | CPC ${c['cpc']:.2f}\n"
-        for a in c["actions"]:
-            body += f"   {a['label']}: {a['count']}"
-            if a["cost_per"] > 0:
-                body += f" (${a['cost_per']:.2f}/шт)"
-            body += "\n"
+        body += f"   ${c['spend']:.2f} | {c['impressions']:,} показов | CTR {c['ctr']:.2f}%"
+        if c['clicks']:
+            body += f" | CPC ${c['cpc']:.2f}"
+        body += "\n"
+        if actions_str:
+            body += f"   {actions_str}\n"
         body += "\n"
 
     footer = f"{'─' * 30}\n💵 Общий расход: ${total_spend:.2f}\n"
